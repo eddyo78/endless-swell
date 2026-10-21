@@ -1,0 +1,24 @@
+{
+  "name": "endless-swell",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Endless Swell — a photoreal browser surfing game.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "build:single": "vite build && node scripts/single.mjs"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.43.1",
+    "vite": "8.3.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

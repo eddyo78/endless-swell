@@ -1,0 +1,233 @@
+{
+  "skinTones": [
+    { "id": "deep", "name": "Deep", "color": "#3b2418" },
+    { "id": "brown", "name": "Brown", "color": "#6e3a22" },
+    { "id": "bronze", "name": "Bronze", "color": "#8d5524" },
+    { "id": "tan", "name": "Tan", "color": "#c68642" },
+    { "id": "sand", "name": "Sand", "color": "#e0ac69" },
+    { "id": "light", "name": "Light", "color": "#f1c27d" }
+  ],
+  "bodies": [
+    { "id": "male", "name": "Male", "tier": "earned", "price": 0, "ownedDefault": true },
+    { "id": "female", "name": "Female", "tier": "earned", "price": 0, "ownedDefault": true }
+  ],
+  "outfits": [
+    {
+      "id": "trunks-red",
+      "name": "Classic Red Trunks",
+      "slot": "bottom",
+      "style": "trunks",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "color": "#c41622",
+      "color2": "#7a0610",
+      "pattern": "solid"
+    },
+    {
+      "id": "trunks-navy",
+      "name": "Navy Trunks",
+      "slot": "bottom",
+      "style": "trunks",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "color": "#16324a",
+      "color2": "#0c1c2c",
+      "pattern": "solid"
+    },
+    {
+      "id": "trunks-palm",
+      "name": "Palm Trunks",
+      "slot": "bottom",
+      "style": "trunks",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "color": "#0e6b4c",
+      "color2": "#d8ffe4",
+      "pattern": "palm"
+    },
+    {
+      "id": "trunks-stripe",
+      "name": "Rail Stripe Trunks",
+      "slot": "bottom",
+      "style": "trunks",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": false,
+      "reward": "common",
+      "color": "#f4f1ea",
+      "color2": "#e23b2f",
+      "pattern": "stripes"
+    },
+    {
+      "id": "bikini-teal",
+      "name": "Teal Bikini",
+      "slot": "outfit",
+      "style": "bikini",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "color": "#14b8b0",
+      "color2": "#063e42",
+      "pattern": "solid"
+    },
+    {
+      "id": "bikini-sunset",
+      "name": "Sunset Bikini",
+      "slot": "outfit",
+      "style": "bikini",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": false,
+      "reward": "common",
+      "color": "#ff6a3d",
+      "color2": "#ffd0a8",
+      "pattern": "stripes"
+    },
+    {
+      "id": "rash-white",
+      "name": "White Rashguard",
+      "slot": "top",
+      "style": "rash",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "color": "#f3f6f8",
+      "color2": "#9fd6ea",
+      "pattern": "solid"
+    },
+    {
+      "id": "rash-reef",
+      "name": "Reef Rashguard",
+      "slot": "top",
+      "style": "rash",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": false,
+      "reward": "common",
+      "color": "#123a40",
+      "color2": "#3ddc97",
+      "pattern": "chevron"
+    },
+    {
+      "id": "rash-gold",
+      "name": "Gold Rashguard",
+      "slot": "top",
+      "style": "rash",
+      "tier": "premium",
+      "price": 400,
+      "ownedDefault": false,
+      "color": "#e2b657",
+      "color2": "#6a4a12",
+      "pattern": "solid"
+    },
+    {
+      "id": "onesie-blue",
+      "name": "Blue Fullsuit",
+      "slot": "outfit",
+      "style": "onesie",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": false,
+      "reward": "rare",
+      "color": "#1b3f73",
+      "color2": "#8fd0ff",
+      "pattern": "panels"
+    },
+    {
+      "id": "onesie-stealth",
+      "name": "Stealth Spring",
+      "slot": "outfit",
+      "style": "onesie",
+      "tier": "premium",
+      "price": 500,
+      "ownedDefault": false,
+      "color": "#141418",
+      "color2": "#3a3a44",
+      "pattern": "panels"
+    }
+  ],
+  "boards": [
+    {
+      "id": "board-blue",
+      "name": "Light Blue Shortboard",
+      "shape": "short",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "color": "#3aa8ea",
+      "color2": "#e8f7ff",
+      "pattern": "solid"
+    },
+    {
+      "id": "board-chevron",
+      "name": "Chevron Shortboard",
+      "shape": "short",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "color": "#0e8f78",
+      "color2": "#f4fff8",
+      "pattern": "chevron"
+    },
+    {
+      "id": "board-sun",
+      "name": "Sunburst Shortboard",
+      "shape": "short",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "color": "#f0c14a",
+      "color2": "#fff6d8",
+      "pattern": "sunburst"
+    },
+    {
+      "id": "board-stripe",
+      "name": "Stripe Shortboard",
+      "shape": "short",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": false,
+      "reward": "common",
+      "color": "#f7f4ee",
+      "color2": "#d23a4a",
+      "pattern": "stripes"
+    },
+    {
+      "id": "board-tiger",
+      "name": "Tiger Shortboard",
+      "shape": "short",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": false,
+      "reward": "epic",
+      "color": "#e8a317",
+      "color2": "#1a1208",
+      "pattern": "tiger"
+    },
+    {
+      "id": "board-fish",
+      "name": "Retro Fish",
+      "shape": "fish",
+      "tier": "premium",
+      "price": 350,
+      "ownedDefault": false,
+      "color": "#f28c28",
+      "color2": "#fff1dc",
+      "pattern": "stripes"
+    },
+    {
+      "id": "board-gun",
+      "name": "Slab Gun",
+      "shape": "gun",
+      "tier": "premium",
+      "price": 600,
+      "ownedDefault": false,
+      "color": "#d8dde6",
+      "color2": "#2a3340",
+      "pattern": "solid"
+    }
+  ]
+}

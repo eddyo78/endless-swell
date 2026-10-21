@@ -1,0 +1,62 @@
+[
+  {
+    "id": "teahupoo",
+    "name": "Teahupo'o",
+    "region": "Tahiti",
+    "hand": "left",
+    "kind": "reef-slab",
+    "realized": true,
+    "tier": "earned",
+    "price": 0,
+    "ownedDefault": true,
+    "blurb": "Heavy left reef slab. The lip throws over a shallow pass and the only line is the barrel."
+  },
+  {
+    "id": "pipeline",
+    "name": "Pipeline",
+    "region": "Oahu",
+    "hand": "left",
+    "kind": "reef",
+    "realized": false,
+    "tier": "premium",
+    "price": 900,
+    "ownedDefault": false,
+    "blurb": "North Shore left. Profile stub — the reef is mapped, the wave is not rideable yet."
+  },
+  {
+    "id": "jbay",
+    "name": "J-Bay",
+    "region": "South Africa",
+    "hand": "right",
+    "kind": "point",
+    "realized": false,
+    "tier": "premium",
+    "price": 900,
+    "ownedDefault": false,
+    "blurb": "Long right point. Profile stub — speed walls will come with the right-hand engine."
+  },
+  {
+    "id": "nazare",
+    "name": "Nazaré",
+    "region": "Portugal",
+    "hand": "tow",
+    "kind": "big-wave",
+    "realized": false,
+    "tier": "premium",
+    "price": 1200,
+    "ownedDefault": false,
+    "blurb": "Canyon slab. Profile stub — tow-in scale is locked."
+  },
+  {
+    "id": "beachbreak",
+    "name": "Beachbreak",
+    "region": "Open coast",
+    "hand": "either",
+    "kind": "beach",
+    "realized": false,
+    "tier": "premium",
+    "price": 400,
+    "ownedDefault": false,
+    "blurb": "Shifting peaks. Profile stub — a softer sand-bottom wave for later."
+  }
+]
