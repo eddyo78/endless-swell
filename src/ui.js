@@ -49,11 +49,18 @@ export function menuHTML(save) {
     const on = t.color.toLowerCase() === save.loadout.skin.toLowerCase() ? " on" : "";
     return `<button type="button" class="swatch${on}" data-skin="${t.color}" style="background:${t.color}" title="${t.name}"></button>`;
   }).join("");
+  const bodies = catalog.bodies.map((b) => {
+    const on = save.loadout.body === b.id ? " on" : "";
+    return `<button type="button" class="bodybtn${on}" data-body="${b.id}">${b.name}</button>`;
+  }).join("");
   return card(`
     <h1>ENDLESS SWELL</h1>
     <p class="sub">TEAHUPO'O · TAHITI</p>
     <p class="lead">A left-hand reef barrel with no horizon. Tour ${save.nextTour} is waiting.</p>
-    <div class="row"><span class="label">Skin</span><div class="swatches">${tones}</div></div>
+    <div class="row pickers">
+      <span class="label">Surfer</span><div class="bodybtns">${bodies}</div>
+      <span class="label">Skin</span><div class="swatches">${tones}</div>
+    </div>
     <div class="actions">
       <button class="big" id="play-free" type="button">Free surf</button>
       <button class="big alt" id="play-tour" type="button">Tour ${save.nextTour}</button>
@@ -184,6 +191,7 @@ function ordinal(n) {
 
 export function bindPanel(root, handlers) {
   root.querySelectorAll("[data-skin]").forEach((btn) => btn.addEventListener("click", () => handlers.skin(btn.dataset.skin)));
+  root.querySelectorAll("[data-body]").forEach((btn) => btn.addEventListener("click", () => handlers.body(btn.dataset.body)));
   root.querySelectorAll("[data-equip]").forEach((btn) => btn.addEventListener("click", () => handlers.equip(btn.dataset.equip)));
   const map = {
     "play-free": "free",

@@ -1,66 +1,27 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { femaleB64, maleB64 } from "./assets/surfers.data.js";
 
-const D = Math.PI / 180;
+const DECK = 0.05;
 
-const POSES = {
-  crouch: {
-    hipsY: 0.55, hips: [18, -15, 0], spine: [30, 0, 0], chest: [12, 6, 0], neck: [-24, 0, 0], head: [-20, 10, 0],
-    thL: [-78, 0, 30], snL: [105, 0, 0], ftL: [-25, 0, -20], thR: [-66, 0, -26], snR: [110, 0, 0], ftR: [-42, 0, 18],
-    uaL: [-58, 0, 70], faL: [-10, 0, 12], hdL: [0, 0, 0], uaR: [30, 0, -42], faR: [-55, 0, 0], hdR: [0, 0, 0],
-  },
-  glide: {
-    hipsY: 0.72, hips: [12, -12, 0], spine: [22, 0, 0], chest: [8, 6, 0], neck: [-16, 0, 0], head: [-12, 10, 0],
-    thL: [-50, 0, 30], snL: [70, 0, 0], ftL: [-20, 0, -20], thR: [-45, 0, -26], snR: [78, 0, 0], ftR: [-33, 0, 18],
-    uaL: [-35, 0, 62], faL: [-15, 0, 10], hdL: [0, 0, 0], uaR: [20, 0, -38], faR: [-40, 0, 0], hdR: [0, 0, 0],
-  },
-  claim: {
-    hipsY: 0.88, hips: [2, 0, 0], spine: [5, 14, 0], chest: [-4, 8, -4], neck: [-8, 6, 0], head: [-14, 14, 0],
-    thL: [-25, 0, 22], snL: [40, 0, 0], ftL: [-15, 0, -16], thR: [-22, 0, -20], snR: [45, 0, 0], ftR: [-22, 0, 14],
-    uaL: [-15, 0, 50], faL: [-10, 0, 8], hdL: [0, 0, 0], uaR: [0, 0, -168], faR: [-12, 0, 0], hdR: [0, 0, 0],
-  },
-  wipe: {
-    hipsY: 0.5, hips: [60, 30, 40], spine: [20, 0, 30], chest: [10, 0, 0], neck: [10, 0, 0], head: [0, 0, 0],
-    thL: [-90, 0, 50], snL: [40, 0, 0], ftL: [0, 0, 0], thR: [-20, 0, -60], snR: [80, 0, 0], ftR: [0, 0, 0],
-    uaL: [-120, 0, 90], faL: [-30, 0, 0], hdL: [0, 0, 0], uaR: [-150, 0, -100], faR: [-30, 0, 0], hdR: [0, 0, 0],
-  },
-};
-
-const POSE_KEYS = Object.keys(POSES.crouch).filter((k) => k !== "hipsY");
-
-function pivot(parent, x, y, z) {
-  const g = new THREE.Group();
-  g.position.set(x, y, z);
-  parent.add(g);
-  return g;
-}
-
-function limb(length, radiusFar, radiusJoint, material, part) {
-  const geo = new THREE.CylinderGeometry(radiusJoint, radiusFar, length, 10, 4);
-  geo.translate(0, -length / 2, 0);
-  const attr = geo.attributes.position;
-  for (let i = 0; i < attr.count; i++) {
-    const ny = -attr.getY(i) / length;
-    const k = 1 + 0.18 * Math.sin(Math.PI * Math.min(1, ny * 1.15));
-    attr.setX(i, attr.getX(i) * k);
-    attr.setZ(i, attr.getZ(i) * k);
-  }
-  geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, material);
-  mesh.userData.part = part;
-  const capA = new THREE.Mesh(new THREE.SphereGeometry(radiusJoint * 1.02, 8, 6), material);
-  capA.userData.part = part;
-  mesh.add(capA);
-  const capB = new THREE.Mesh(new THREE.SphereGeometry(radiusFar * 1.02, 8, 6), material);
-  capB.userData.part = part;
-  capB.position.y = -length;
-  mesh.add(capB);
-  return mesh;
-}
-
-function tag(mesh, part) {
-  mesh.userData.part = part;
-  return mesh;
-}
+const _q = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
+const _up = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+const _side = new THREE.Vector3();
+const _hip = new THREE.Vector3();
+const _to = new THREE.Vector3();
+const _pole = new THREE.Vector3();
+const _axis = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+const _candA = new THREE.Vector3();
+const _candB = new THREE.Vector3();
+const _knee = new THREE.Vector3();
+const _desired = new THREE.Vector3();
+const _target = new THREE.Vector3();
+const _offset = new THREE.Vector3();
+const _shoulder = new THREE.Vector3();
+const _basis = new THREE.Matrix4();
 
 export function patternAmount(pattern, u, v) {
   if (pattern === "stripes") return Math.abs(Math.sin(u * 18)) > 0.72 ? 1 : 0;
@@ -174,113 +135,341 @@ function paintBoard(geo, pattern, c1, c2) {
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 }
 
-export function createSurfer() {
-  const skin = new THREE.MeshPhysicalMaterial({ color: 0x6e3a22, roughness: 0.5, clearcoat: 0.25, clearcoatRoughness: 0.5, sheen: 0.3, sheenColor: new THREE.Color("#6a3d28") });
-  const cloth = new THREE.MeshStandardMaterial({ color: 0xb0141a, roughness: 0.62, vertexColors: true });
-  const hair = new THREE.MeshStandardMaterial({ color: 0x0c0807, roughness: 0.8 });
-  const suit = new THREE.MeshStandardMaterial({ color: 0x1b3f73, roughness: 0.45, vertexColors: true });
-  const rash = new THREE.MeshStandardMaterial({ color: 0xf3f6f8, roughness: 0.55, vertexColors: true });
-  const bikiniMat = new THREE.MeshStandardMaterial({ color: 0x14b8b0, roughness: 0.5, vertexColors: true });
+function decodeGlb(b64) {
+  const raw = atob(b64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr.buffer;
+}
+
+function loadGlb(b64) {
+  return new Promise((resolve, reject) => {
+    new GLTFLoader().parse(decodeGlb(b64), "", resolve, reject);
+  });
+}
+
+function findBone(bones, name) {
+  return bones[name] || bones[name.replaceAll(".", "")];
+}
+
+function chainOf(bones, upperName, midName, endName) {
+  const upper = findBone(bones, upperName);
+  const mid = findBone(bones, midName);
+  const end = findBone(bones, endName);
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  upper.getWorldPosition(a);
+  mid.getWorldPosition(b);
+  end.getWorldPosition(c);
+  const upperDir = b.clone().sub(a);
+  const lowerDir = c.clone().sub(b);
+  return {
+    upper,
+    mid,
+    end,
+    upperLen: upperDir.length(),
+    lowerLen: lowerDir.length(),
+    upperDir: upperDir.normalize(),
+    lowerDir: lowerDir.normalize(),
+    endRest: c.clone(),
+  };
+}
+
+function prepareRig(gltf, kind) {
+  const root = gltf.scene;
+  root.name = kind;
+  root.updateMatrixWorld(true);
+  let skeleton = null;
+  const meshes = {};
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    meshes[obj.name] = obj;
+    obj.frustumCulled = false;
+    obj.castShadow = false;
+    obj.receiveShadow = false;
+    if (obj.isSkinnedMesh && !skeleton) skeleton = obj.skeleton;
+  });
+  const bones = {};
+  for (const bone of skeleton.bones) bones[bone.name] = bone;
+  const body = meshes.body;
+  body.geometry.computeBoundingBox();
+  const minY = body.geometry.boundingBox.min.y;
+  root.position.y = -minY + DECK;
+  return {
+    kind,
+    root,
+    bones,
+    meshes,
+    minY,
+    restRoot: bones.root.position.clone(),
+    legL: chainOf(bones, "upperleg01.L", "lowerleg01.L", "foot.L"),
+    legR: chainOf(bones, "upperleg01.R", "lowerleg01.R", "foot.R"),
+    armL: chainOf(bones, "upperarm01.L", "lowerarm01.L", "wrist.L"),
+    armR: chainOf(bones, "upperarm01.R", "lowerarm01.R", "wrist.R"),
+  };
+}
+
+function clothMaterial(roughness, metalness = 0.02) {
+  return new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness,
+    metalness,
+    vertexColors: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+}
+
+function paintMesh(mesh, pattern, c1, c2) {
+  if (!mesh) return;
+  paintGeometry(mesh.geometry, pattern, c1, c2);
+}
+
+function showMesh(mesh, visible) {
+  if (mesh) mesh.visible = visible;
+}
+
+function mixW(weights, crouch, glide, claim, wipe) {
+  return crouch * weights.crouch + glide * weights.glide + claim * weights.claim + wipe * (weights.wipe || 0);
+}
+
+function setDirection(bone, bindDir, worldDir) {
+  const parent = bone.parent;
+  parent.updateWorldMatrix(true, false);
+  parent.getWorldQuaternion(_q);
+  _desired.copy(worldDir).normalize().applyQuaternion(_q2.copy(_q).invert());
+  if (_desired.lengthSq() < 1e-8 || bindDir.lengthSq() < 1e-8) return;
+  bone.quaternion.setFromUnitVectors(bindDir, _desired);
+}
+
+function solveTwoBone(chain, target, pole) {
+  const { upper, mid, upperLen, lowerLen, upperDir, lowerDir } = chain;
+  upper.updateWorldMatrix(true, false);
+  _hip.setFromMatrixPosition(upper.matrixWorld);
+  _to.copy(target).sub(_hip);
+  const reach = Math.max(upperLen + lowerLen - 1e-4, 1e-4);
+  const minReach = Math.abs(upperLen - lowerLen) + 1e-4;
+  const raw = _to.length();
+  const len = Math.min(reach, Math.max(minReach, raw || minReach));
+  if (raw < 1e-6) _to.set(0, -1, 0);
+  _to.setLength(len);
+  _pole.copy(pole).sub(_hip);
+  _axis.crossVectors(_to, _pole);
+  if (_axis.lengthSq() < 1e-10) _axis.set(1, 0, 0);
+  _axis.normalize();
+  const cosA = THREE.MathUtils.clamp((upperLen * upperLen + len * len - lowerLen * lowerLen) / (2 * upperLen * len), -1, 1);
+  const ang = Math.acos(cosA);
+  _dir.copy(_to).normalize();
+  _candA.copy(_dir).applyAxisAngle(_axis, ang);
+  _candB.copy(_dir).applyAxisAngle(_axis, -ang);
+  const kneeDir = _candA.dot(_pole) >= _candB.dot(_pole) ? _candA : _candB;
+  setDirection(upper, upperDir, kneeDir);
+  upper.updateWorldMatrix(true, true);
+  _knee.setFromMatrixPosition(mid.matrixWorld);
+  _to.copy(target).sub(_knee);
+  setDirection(mid, lowerDir, _to);
+  mid.updateWorldMatrix(true, true);
+}
+
+function plantFoot(foot, holder, armature) {
+  holder.getWorldQuaternion(_q);
+  _up.set(0, 1, 0).applyQuaternion(_q);
+  armature.getWorldQuaternion(_q2);
+  _fwd.set(0, 0, 1).applyQuaternion(_q2);
+  _fwd.addScaledVector(_up, -_fwd.dot(_up));
+  if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, 1).applyQuaternion(_q2);
+  _fwd.normalize();
+  _side.crossVectors(_up, _fwd).normalize();
+  _fwd.crossVectors(_side, _up).normalize();
+  _basis.makeBasis(_side, _up, _fwd);
+  _q.setFromRotationMatrix(_basis);
+  foot.parent.updateWorldMatrix(true, false);
+  foot.parent.getWorldQuaternion(_q2);
+  foot.quaternion.copy(_q2.invert()).multiply(_q);
+}
+
+function pointFromShoulder(chain, armature, x, y, z) {
+  chain.upper.updateWorldMatrix(true, false);
+  _shoulder.setFromMatrixPosition(chain.upper.matrixWorld);
+  armature.getWorldQuaternion(_q);
+  _offset.set(x, y, z).applyQuaternion(_q);
+  return _target.copy(_shoulder).add(_offset);
+}
+
+function curlFingers(bones, amount) {
+  for (const [name, bone] of Object.entries(bones)) {
+    if (!name.startsWith("finger")) continue;
+    const seg = name.includes("-3") ? 1 : name.includes("-2") ? 0.65 : 0.3;
+    bone.rotation.x = amount * seg;
+  }
+}
+
+function poseRig(rig, holder, weights, time, extra) {
+  const bones = rig.bones;
+  const steer = extra.steer || 0;
+  const thr = extra.thr || 0;
+  const tube = extra.inTube ? 1 : 0;
+  const deep = extra.deep ? 1 : 0;
+  const wipe = weights.wipe || 0;
+  for (const bone of rig.bones.root.skeleton?.bones || Object.values(bones)) bone.quaternion.identity();
+  const drop = mixW(weights, 0.42, 0.22, 0.12, 0.3) + tube * 0.06 + deep * 0.05 + Math.max(-thr, 0) * 0.05;
+  const pump = Math.sin(time * 8.4) * Math.max(thr, 0);
+  bones.root.position.copy(rig.restRoot);
+  bones.root.position.y -= drop - pump * 0.035;
+  const bend = mixW(weights, 0.82, 0.4, 0.16, 0.35) + tube * 0.12 + deep * 0.08;
+  const lean = steer * 0.28;
+  bones.root.rotation.set(bend * 0.12, -steer * 0.08, lean * 0.45);
+  bones.spine05.rotation.set(bend * 0.42, 0, lean * 0.35);
+  bones.spine04.rotation.set(bend * 0.22, 0, lean * 0.2);
+  bones.spine03.rotation.set(bend * 0.06, steer * -0.06, lean * 0.12);
+  bones.spine02.rotation.set(-bend * 0.08, 0, 0);
+  bones.spine01.rotation.set(-bend * 0.22, steer * -0.1, lean * 0.08);
+  const hinge = bend * 0.74;
+  bones.neck01.rotation.set(-hinge * 0.45, steer * 0.08, 0);
+  bones.neck02.rotation.set(-hinge * 0.12, 0, 0);
+  bones.head.rotation.set(-hinge * 0.18 + 0.22, steer * 0.12, 0);
+  const clavL = findBone(bones, "clavicle.L");
+  const clavR = findBone(bones, "clavicle.R");
+  if (clavL) clavL.rotation.z = 0.45;
+  if (clavR) clavR.rotation.z = -0.3;
+
+  if (wipe > 0.5) {
+    const s = Math.sin(time * 7.5);
+    const c = Math.cos(time * 5.1);
+    bones.root.rotation.set(0.8 * s, 0.6 * c, 1.1 * s);
+    bones.spine03.rotation.set(0.5, 0.4 * s, 0.6 * c);
+    findBone(bones, "upperarm01.L").rotation.set(-1.5, 0.4 * s, 1.3);
+    findBone(bones, "upperarm01.R").rotation.set(-1.2, -0.4, -1.5);
+    findBone(bones, "lowerarm01.L").rotation.set(0.7 * c, 0, 0.4);
+    findBone(bones, "lowerarm01.R").rotation.set(0.5, 0, -0.5);
+    findBone(bones, "upperleg01.L").rotation.set(-1.3, 0.2, 0.5 * s);
+    findBone(bones, "upperleg01.R").rotation.set(-0.5, -0.4, -0.9);
+    findBone(bones, "lowerleg01.L").rotation.set(1.15, 0, 0);
+    findBone(bones, "lowerleg01.R").rotation.set(0.7 + 0.3 * s, 0, 0);
+    bones.head.rotation.set(0.4 * s, 0.5 * c, 0.3 * s);
+    curlFingers(bones, 0.8);
+    return;
+  }
+
+  holder.updateMatrixWorld(true);
+  const front = mixW(weights, 0.34, 0.2, 0.12, 0);
+  const back = mixW(weights, 0.38, 0.22, 0.14, 0);
+  const liftL = DECK + (rig.legL.endRest.y - rig.minY);
+  const liftR = DECK + (rig.legR.endRest.y - rig.minY);
+  const footL = _candA.set(-0.12, liftL, -0.04 - front);
+  const footR = _candB.set(0.15, liftR, 0.08 + back);
+  const worldL = holder.localToWorld(footL.clone());
+  const worldR = holder.localToWorld(footR.clone());
+  rig.root.getWorldQuaternion(_q);
+  const poleL = holder.localToWorld(new THREE.Vector3(-0.28, liftL + 0.45, -0.55));
+  const poleR = holder.localToWorld(new THREE.Vector3(0.28, liftR + 0.45, -0.55));
+  solveTwoBone(rig.legL, worldL, poleL);
+  solveTwoBone(rig.legR, worldR, poleR);
+  plantFoot(rig.legL.end, holder, rig.root);
+  plantFoot(rig.legR.end, holder, rig.root);
+
+  const tuck = tube * 0.08 + deep * 0.06;
+  const wall = Math.max(0, -steer) * 0.1;
+  const claim = weights.claim || 0;
+  const left = pointFromShoulder(
+    rig.armL,
+    rig.root,
+    0.1 + wall * (1 - claim),
+    mixW(weights, -0.46, -0.28, -0.16, 0) - tuck + pump * 0.04,
+    mixW(weights, -0.16, -0.22, -0.08, 0),
+  ).clone();
+  const right = pointFromShoulder(
+    rig.armR,
+    rig.root,
+    mixW(weights, -0.06, -0.04, 0.02, 0),
+    mixW(weights, -0.34, -0.2, 0.5, 0) + pump * 0.03,
+    mixW(weights, 0.08, 0.04, -0.08, 0),
+  ).clone();
+  const elbowL = pointFromShoulder(rig.armL, rig.root, 0.42, -0.18, -0.4).clone();
+  const elbowR = pointFromShoulder(rig.armR, rig.root, -0.38, claim > 0.4 ? 0.15 : -0.16, -0.36).clone();
+  solveTwoBone(rig.armL, left, elbowL);
+  solveTwoBone(rig.armR, right, elbowR);
+  curlFingers(bones, 0.35 + tube * 0.12);
+}
+
+export async function createSurfer() {
+  const [maleGltf, femaleGltf] = await Promise.all([loadGlb(maleB64), loadGlb(femaleB64)]);
+  const male = prepareRig(maleGltf, "male");
+  const female = prepareRig(femaleGltf, "female");
+
+  const skin = new THREE.MeshPhysicalMaterial({
+    color: 0x6e3a22,
+    roughness: 0.42,
+    metalness: 0,
+    clearcoat: 0.16,
+    clearcoatRoughness: 0.42,
+    sheen: 0.35,
+    sheenRoughness: 0.55,
+    sheenColor: new THREE.Color("#c4896a"),
+    specularIntensity: 0.55,
+    ior: 1.4,
+    envMapIntensity: 0.9,
+  });
+  skin.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <opaque_fragment>",
+      `float sssWrap = pow(1.0 - saturate(dot(normal, geometryViewDir)), 2.0);
+       outgoingLight += diffuseColor.rgb * vec3(1.0, 0.42, 0.3) * sssWrap * 0.07;
+       #include <opaque_fragment>`,
+    );
+  };
+  const eyes = new THREE.MeshPhysicalMaterial({ color: 0x1a120e, roughness: 0.18, clearcoat: 0.7, clearcoatRoughness: 0.15, metalness: 0 });
+  const lashes = new THREE.MeshStandardMaterial({ color: 0x100c0a, roughness: 0.7, side: THREE.DoubleSide });
+  const teeth = new THREE.MeshStandardMaterial({ color: 0xe7e0d6, roughness: 0.45 });
+  const hair = new THREE.MeshStandardMaterial({
+    color: 0x140e0c,
+    roughness: 0.62,
+    metalness: 0.02,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  const trunks = clothMaterial(0.72);
+  const bikini = clothMaterial(0.48);
+  const rash = clothMaterial(0.55);
+  const suit = clothMaterial(0.3, 0.08);
   const boardMat = new THREE.MeshPhysicalMaterial({
-    color: 0xffffff, roughness: 0.38, clearcoat: 0.6, clearcoatRoughness: 0.3, vertexColors: true,
+    color: 0xffffff,
+    roughness: 0.38,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.3,
+    vertexColors: true,
   });
 
-  const root = new THREE.Group();
-  const J = {};
-  J.hips = pivot(root, 0, 0.95, 0);
-  const hipMesh = tag(new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), skin), "hips");
-  hipMesh.scale.set(1.12, 0.85, 0.82);
-  J.hips.add(hipMesh);
-
-  J.spine = pivot(J.hips, 0, 0.06, 0);
-  const spineMesh = tag(new THREE.Mesh(new THREE.SphereGeometry(0.15, 14, 12), skin), "torso");
-  spineMesh.scale.set(1.1, 1.25, 0.85);
-  spineMesh.position.y = 0.14;
-  J.spine.add(spineMesh);
-
-  J.chest = pivot(J.spine, 0, 0.26, 0);
-  const chestMesh = tag(new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), skin), "torso");
-  chestMesh.scale.set(1.35, 1.08, 0.8);
-  chestMesh.position.y = 0.1;
-  J.chest.add(chestMesh);
-
-  const chestSide = [];
-  for (const s of [-1, 1]) {
-    const pec = tag(new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), skin), "torso");
-    pec.scale.set(1.15, 1.6, 0.85);
-    pec.position.set(0.13 * s, 0.07, -0.05);
-    J.chest.add(pec);
-    chestSide.push(pec);
-    const trap = tag(new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), skin), "torso");
-    trap.position.set(0.215 * s, 0.22, 0);
-    J.chest.add(trap);
+  const assign = {
+    body: skin,
+    eyes,
+    lashes,
+    teeth,
+    hair,
+    ponytail: hair,
+    trunks,
+    bikiniBottom: bikini,
+    bikiniTop: bikini,
+    rash,
+    onesie: suit,
+  };
+  for (const rig of [male, female]) {
+    for (const [name, mesh] of Object.entries(rig.meshes)) {
+      const mat = assign[name];
+      if (!mat) continue;
+      if (mesh.material && mesh.material !== mat) mesh.material.dispose();
+      mesh.material = mat;
+    }
   }
-  const collar = tag(new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), skin), "torso");
-  collar.scale.set(1.5, 0.6, 0.8);
-  collar.position.set(0, 0.25, -0.02);
-  J.chest.add(collar);
+  female.root.visible = false;
 
-  const breasts = new THREE.Group();
-  for (const s of [-1, 1]) {
-    const b = tag(new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), skin), "torso");
-    b.scale.set(1, 0.9, 1.15);
-    b.position.set(0.075 * s, 0.12, 0.1);
-    breasts.add(b);
-  }
-  breasts.visible = false;
-  J.chest.add(breasts);
-
-  J.neck = pivot(J.chest, 0, 0.3, 0);
-  const neckMesh = tag(new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.12, 8), skin), "skin");
-  neckMesh.position.y = 0.04;
-  J.neck.add(neckMesh);
-  J.head = pivot(J.neck, 0, 0.1, 0.01);
-  const head = tag(new THREE.Mesh(new THREE.SphereGeometry(0.105, 16, 12), skin), "head");
-  head.scale.set(0.92, 1.12, 1.02);
-  head.position.y = 0.09;
-  J.head.add(head);
-  const hairMesh = tag(new THREE.Mesh(new THREE.SphereGeometry(0.108, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), hair), "hair");
-  hairMesh.scale.set(0.95, 1.1, 1.05);
-  hairMesh.position.set(0, 0.105, -0.008);
-  hairMesh.rotation.x = -0.25;
-  J.head.add(hairMesh);
-
-  const shorts = [];
-  for (const [name, sign] of [["L", 1], ["R", -1]]) {
-    J["sh" + name] = pivot(J.chest, 0.22 * sign, 0.21, 0);
-    J["ua" + name] = pivot(J["sh" + name], 0, 0, 0);
-    J["ua" + name].add(limb(0.29, 0.068, 0.052, skin, "arm"));
-    J["fa" + name] = pivot(J["ua" + name], 0, -0.29, 0);
-    J["fa" + name].add(limb(0.26, 0.054, 0.038, skin, "arm"));
-    J["hd" + name] = pivot(J["fa" + name], 0, -0.26, 0);
-    const hand = tag(new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), skin), "hand");
-    hand.scale.set(0.6, 1.5, 1);
-    hand.position.y = -0.06;
-    J["hd" + name].add(hand);
-
-    J["th" + name] = pivot(J.hips, 0.095 * sign, -0.03, 0);
-    J["th" + name].add(limb(0.44, 0.1, 0.065, skin, "leg"));
-    const short = tag(new THREE.Mesh(new THREE.CylinderGeometry(0.104, 0.096, 0.26, 12), cloth), "shorts");
-    short.position.y = -0.11;
-    J["th" + name].add(short);
-    shorts.push(short);
-    J["sn" + name] = pivot(J["th" + name], 0, -0.44, 0);
-    J["sn" + name].add(limb(0.44, 0.066, 0.042, skin, "leg"));
-    J["ft" + name] = pivot(J["sn" + name], 0, -0.44, 0);
-    const foot = tag(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.05, 0.25), skin), "foot");
-    foot.position.set(0, -0.025, 0.07);
-    J["ft" + name].add(foot);
-  }
-
-  const bikiniTop = new THREE.Group();
-  for (const s of [-1, 1]) {
-    const cup = tag(new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), bikiniMat), "bikini");
-    cup.scale.set(1.1, 0.85, 0.7);
-    cup.position.set(0.07 * s, 0.16, 0.12);
-    bikiniTop.add(cup);
-  }
-  bikiniTop.visible = false;
-  J.chest.add(bikiniTop);
+  const yaw = new THREE.Group();
+  yaw.rotation.y = Math.PI - 0.42;
+  yaw.add(male.root, female.root);
 
   const board = new THREE.Group();
   let boardMesh = new THREE.Mesh(boardGeometry("short"), boardMat);
@@ -293,128 +482,88 @@ export function createSurfer() {
     boardMesh.add(fin);
   }
 
-  const yaw = new THREE.Group();
-  yaw.rotation.y = Math.PI / 2 + 0.6;
-  yaw.add(root);
-  root.position.set(0, 0.03, 0.05);
   const body = new THREE.Group();
   body.add(yaw);
   const holder = new THREE.Group();
   holder.add(board, body);
 
-  function partMeshes() {
-    const all = [];
-    holder.traverse((o) => {
-      if (o.isMesh && o.userData.part) all.push(o);
-    });
-    return all;
-  }
+  const surfer = {
+    holder,
+    board,
+    body,
+    yaw,
+    male,
+    female,
+    active: male,
+    materials: { skin, trunks, bikini, rash, suit, boardMat },
+    apply(loadout, byId) {
+      const femaleOn = loadout.body === "female";
+      male.root.visible = !femaleOn;
+      female.root.visible = femaleOn;
+      surfer.active = femaleOn ? female : male;
+      skin.color.set(loadout.skin || "#6e3a22");
+      skin.sheenColor.copy(skin.color).offsetHSL(0.01, 0.05, 0.12);
+      skin.emissive.copy(skin.color).multiplyScalar(0.012);
 
-  function apply(loadout, byId) {
-    const female = loadout.body === "female";
-    skin.color.set(loadout.skin || "#6e3a22");
-    skin.sheenColor.set(loadout.skin || "#6e3a22");
-    hipMesh.scale.set(female ? 1.34 : 1.12, female ? 0.78 : 0.85, female ? 1.05 : 0.82);
-    chestMesh.scale.set(female ? 1.12 : 1.35, female ? 1.02 : 1.08, female ? 0.72 : 0.8);
-    J.shL.position.x = female ? 0.18 : 0.22;
-    J.shR.position.x = female ? -0.18 : -0.22;
-    holder.scale.setScalar(female ? 1.0 : 1.06);
-
-    const bottom = byId[loadout.bottom];
-    const top = loadout.top ? byId[loadout.top] : null;
-    const onesie = bottom && bottom.style === "onesie";
-    breasts.visible = female && !onesie;
-    const bikini = bottom && bottom.style === "bikini";
-    const rashOn = !onesie && top && top.style === "rash";
-
-    const clothItem = bottom;
-    cloth.color.set("#ffffff");
-    suit.color.set("#ffffff");
-    rash.color.set("#ffffff");
-    bikiniMat.color.set("#ffffff");
-    const c1 = clothItem?.color || "#c41622";
-    const c2 = clothItem?.color2 || c1;
-    const pat = clothItem?.pattern || "solid";
-    for (const m of shorts) {
-      m.material = onesie ? suit : bikini ? bikiniMat : cloth;
-      m.visible = true;
-      m.scale.set(1, bikini ? 0.48 : 1, 1);
-      m.position.y = bikini ? -0.05 : -0.11;
-      const g = m.geometry;
-      paintGeometry(g, pat, c1, c2);
-    }
-    if (bikini) {
-      paintGeometry(bikiniTop.children[0].geometry, pat, c1, c2);
-      paintGeometry(bikiniTop.children[1].geometry, pat, c1, c2);
-      bikiniMat.color.set("#ffffff");
-    }
-    bikiniTop.visible = bikini && !onesie;
-
-    const suitColor = onesie ? c1 : "#1b3f73";
-    suit.color.set(suitColor);
-    for (const m of partMeshes()) {
-      if (onesie && (m.userData.part === "torso" || m.userData.part === "arm" || m.userData.part === "leg" || m.userData.part === "hips" || m.userData.part === "foot")) {
-        m.material = suit;
-      } else if (m.userData.part === "torso" || m.userData.part === "arm" || m.userData.part === "leg" || m.userData.part === "hips" || m.userData.part === "foot" || m.userData.part === "skin") {
-        if (m.userData.part !== "shorts" && m.userData.part !== "bikini") m.material = skin;
-      }
-    }
-    if (rashOn) {
-      rash.color.set("#ffffff");
-      const rc1 = top.color;
-      const rc2 = top.color2 || rc1;
-      for (const m of partMeshes()) {
-        if (m.userData.part === "torso") {
-          m.material = rash;
-          paintGeometry(m.geometry, top.pattern || "solid", rc1, rc2);
+      const bottom = byId[loadout.bottom];
+      const top = loadout.top ? byId[loadout.top] : null;
+      const style = bottom?.style || "trunks";
+      const onesie = style === "onesie";
+      const bikiniOn = style === "bikini" && !onesie;
+      const trunksOn = style === "trunks" && !onesie;
+      const rashOn = !onesie && top && top.style === "rash";
+      for (const rig of [male, female]) {
+        const m = rig.meshes;
+        showMesh(m.body, true);
+        showMesh(m.eyes, true);
+        showMesh(m.lashes, true);
+        showMesh(m.teeth, true);
+        showMesh(m.hair, true);
+        showMesh(m.ponytail, rig.kind === "female");
+        showMesh(m.trunks, trunksOn);
+        showMesh(m.bikiniBottom, bikiniOn);
+        showMesh(m.bikiniTop, bikiniOn && !rashOn);
+        showMesh(m.rash, rashOn);
+        showMesh(m.onesie, onesie);
+        const c1 = bottom?.color || "#c41622";
+        const c2 = bottom?.color2 || c1;
+        const pat = bottom?.pattern || "solid";
+        if (trunksOn) paintMesh(m.trunks, pat, c1, c2);
+        if (bikiniOn) {
+          paintMesh(m.bikiniBottom, pat, c1, c2);
+          paintMesh(m.bikiniTop, pat, c1, c2);
         }
+        if (onesie) paintMesh(m.onesie, pat, c1, c2);
+        if (rashOn) paintMesh(m.rash, top.pattern || "solid", top.color, top.color2 || top.color);
       }
-    }
-    breasts.children?.forEach?.(() => {});
-    if (!onesie) {
-      breasts.traverse((o) => {
-        if (o.isMesh) o.material = skin;
-      });
-    }
 
-    const boardItem = byId[loadout.board];
-    if (boardItem) {
-      boardMesh.geometry.dispose();
-      boardMesh.geometry = boardGeometry(boardItem.shape || "short");
-      paintBoard(boardMesh.geometry, boardItem.pattern || "solid", boardItem.color, boardItem.color2 || "#ffffff");
-      const fins = boardMesh.children;
-      const long = boardItem.shape === "gun" ? 1.2 : boardItem.shape === "fish" ? 0.82 : 1;
-      fins.forEach((f, i) => {
-        f.position.z = (i === 0 ? 0.78 : 0.66) * long - 0.06;
-        f.visible = !(boardItem.shape === "fish" && i > 0);
-      });
-    }
-  }
-
-  return { holder, board, body, yaw, joints: J, apply, materials: { skin, cloth, suit, rash, bikiniMat, boardMat } };
+      const boardItem = byId[loadout.board];
+      if (boardItem) {
+        boardMesh.geometry.dispose();
+        boardMesh.geometry = boardGeometry(boardItem.shape || "short");
+        paintBoard(boardMesh.geometry, boardItem.pattern || "solid", boardItem.color, boardItem.color2 || "#ffffff");
+        const fins = boardMesh.children;
+        const long = boardItem.shape === "gun" ? 1.2 : boardItem.shape === "fish" ? 0.82 : 1;
+        fins.forEach((f, i) => {
+          f.position.z = (i === 0 ? 0.78 : 0.66) * long - 0.06;
+          f.visible = !(boardItem.shape === "fish" && i > 0);
+        });
+      }
+    },
+  };
+  return surfer;
 }
 
-export function applyPose(surfer, weights, time) {
-  const J = surfer.joints;
-  let hipsY = 0;
-  for (const [name, w] of Object.entries(weights)) hipsY += POSES[name].hipsY * w;
-  J.hips.position.y = hipsY + Math.sin(time * 2.1) * 0.01;
-  for (const key of POSE_KEYS) {
-    let x = 0;
-    let y = 0;
-    let z = 0;
-    for (const [name, w] of Object.entries(weights)) {
-      const e = POSES[name][key];
-      x += e[0] * w;
-      y += e[1] * w;
-      z += e[2] * w;
-    }
-    if (key === "uaL") {
-      z += Math.sin(time * 1.7) * 4;
-      x += Math.sin(time * 1.1) * 5;
-    }
-    if (key === "uaR") x += Math.sin(time * 1.3 + 1) * 4;
-    if (key === "spine") y += Math.sin(time * 0.9) * 3;
-    J[key].rotation.set(x * D, y * D, z * D, "YXZ");
-  }
+export function applyPose(surfer, weights, time, extra = {}) {
+  const rig = surfer.active;
+  if (!rig) return;
+  const safe = {
+    crouch: weights.crouch || 0,
+    glide: weights.glide || 0,
+    claim: weights.claim || 0,
+    wipe: weights.wipe || 0,
+  };
+  const sum = safe.crouch + safe.glide + safe.claim + safe.wipe;
+  if (sum < 1e-4) safe.crouch = 1;
+  poseRig(rig, surfer.holder, safe, time, extra);
 }

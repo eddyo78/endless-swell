@@ -276,7 +276,7 @@ function makeFin() {
   return g;
 }
 
-export function createWorld(canvas) {
+export async function createWorld(canvas) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: false,
@@ -379,7 +379,7 @@ export function createWorld(canvas) {
   const hemi = new THREE.HemisphereLight(0x339988, 0x005858, 0.2);
   scene.add(hemi);
 
-  const surfer = createSurfer();
+  const surfer = await createSurfer();
   scene.add(surfer.holder);
 
   const spray = new Spray(7000);

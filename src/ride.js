@@ -413,7 +413,12 @@ export function syncWorld(world, st, dt, input, cond) {
   for (const k of Object.keys(weights)) {
     st.pose[k] += (weights[k] - st.pose[k]) * (snap ? 1 : Math.min(1, dt * 4));
   }
-  applyPose(world.surfer, st.pose, st.t);
+  applyPose(world.surfer, st.pose, st.t, {
+    steer: input.steer,
+    thr: input.thr,
+    inTube: st.inTube,
+    deep: st.deep,
+  });
 
   const aspect = world.camera.aspect;
   const m = clamp((aspect - 0.6) / 1.2, 0, 1);

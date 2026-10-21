@@ -42,7 +42,7 @@ Free surf is one showcase wave. **Tour N** is a seeded event: swell, wind, tide,
 
 Placement can unlock earned gear. Premium pieces stay locked (nothing is charged). Progress is in `localStorage` under `endless-swell-save-v1`.
 
-The character is assembled from `src/data/catalog.json`: body, skin tone, bottom, optional top, board shape and pattern. Owned items swap in immediately.
+The character is assembled from `src/data/catalog.json`: male or female body, skin tone, bottom, optional top, board shape and pattern. The main menu picks the surfer and the skin tone. Owned items swap in immediately. The bodies are rigged MakeHuman meshes posed in code; see [ASSETS.md](ASSETS.md).
 
 ## Layout
 
@@ -50,10 +50,10 @@ The character is assembled from `src/data/catalog.json`: body, skin tone, bottom
 - `src/shaders.js`, `src/scene.js` — water, sky, island, boats, spray, bloom, grade
 - `src/ride.js` — physics, camera clamp, hazards
 - `src/competition.js` — tours, heats, judging
-- `src/surfer.js` — procedural body and board
+- `src/surfer.js` — rigged surfers, outfits, code-driven poses, board
 - `src/save.js`, `src/ui.js`, `src/main.js` — save, menus, match flow
 
-Water, spray, foam, the island, and the boards are procedural. There are no image textures.
+Water, spray, foam, the island, and the boards are procedural. Surfer bodies, hair, and outfit shells come from the MakeHuman CC0 base mesh (see [ASSETS.md](ASSETS.md)). There are no image textures.
 
 ## Roadmap
 
@@ -63,4 +63,4 @@ A real shop flow for the premium pieces, the other four breaks as their own bath
 
 Code is [MIT](LICENSE), Copyright © 2026 Ed Ostrowski.
 
-[three.js](https://github.com/mrdoob/three.js) is MIT licensed (Copyright © 2010-2026 three.js authors). No third-party art is bundled. The Teahupoʻo footage used while building the look is a private reference and is not in this repository.
+[three.js](https://github.com/mrdoob/three.js) is MIT licensed (Copyright © 2010-2026 three.js authors). Surfer meshes are derived from MakeHuman assets released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) by the MakeHuman Team. Sources, what was generated here, and why the meshes are not Draco-compressed are listed in [ASSETS.md](ASSETS.md). No MakeHuman application code (AGPL) is included. The Teahupoʻo footage used while building the look is a private reference and is not in this repository.

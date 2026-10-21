@@ -224,16 +224,20 @@ void main(){
   float fm = vFoam;
   if (fm > 0.001) {
     vec2 flow = vec2(0.0, -0.11) * uTime;
-    vec2 fuv = mix(uvW * vec2(0.18, 0.12), uvF * 0.1, flat_);
+    float close = smoothstep(0.28, 1.55, dist);
+    float detail = mix(4.2, 1.0, smoothstep(0.7, 6.0, dist));
+    vec2 fuv = mix(uvW * vec2(0.22, 0.14), uvF * 0.12, flat_) * detail;
     vec4 f1 = texture2D(tFoam, fuv + flow);
-    vec4 f2 = texture2D(tFoam, fuv * 2.7 + flow * 1.7 + vec2(0.02, 0.0));
-    float n = f1.r * 0.6 + f2.r * 0.4;
-    float cells = f2.g;
-    float m = smoothstep(1.0 - fm, 1.0 - fm + 0.18, n * 0.85 + cells * 0.28);
+    vec4 f2 = texture2D(tFoam, fuv * 2.8 + flow * 1.7 + vec2(0.02, 0.0));
+    vec4 f3 = texture2D(tFoam, fuv * 6.4 + vec2(0.0, -0.27) * uTime);
+    float n = f1.r * 0.42 + f2.r * 0.34 + f3.r * 0.24;
+    float cells = f2.g * 0.55 + f3.g * 0.45;
+    float broken = smoothstep(0.4, 0.74, n * 0.6 + cells * 0.58);
     float dif = clamp(dot(Nd, L) * 0.45 + 0.55, 0.0, 1.0);
-    vec3 fc = vec3(0.93, 0.98, 1.0) * (0.42 + 0.9 * dif * shadow);
+    vec3 fc = vec3(0.93, 0.98, 1.0) * (0.38 + 0.85 * dif * shadow);
     fc = mix(fc, fc * vec3(0.72, 0.92, 0.95), vTube * 0.45);
-    col = mix(col, fc, m * clamp(fm * 1.55, 0.0, 1.0));
+    float cover = broken * close * clamp(fm, 0.0, 0.72) * (0.42 + 0.58 * cells);
+    col = mix(col, fc, cover);
   }
   float fogA = 1.0 - exp(-dist * 0.00028);
   col = mix(col, hazeCol(-V), fogA);
@@ -260,12 +264,12 @@ export const spray = {
     void main(){
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
       gl_Position = projectionMatrix * mv;
-      float ps = aSize * uScale / max(-mv.z, 0.05);
-      vA = aAlpha * smoothstep(0.05, 0.6, -mv.z);
+      float ps = aSize * uScale / max(-mv.z, 0.45);
+      vA = aAlpha * smoothstep(0.2, 0.7, -mv.z);
       vB = aBright;
-      vA *= 1.0 - smoothstep(500.0, 900.0, ps);
+      vA *= 1.0 - smoothstep(90.0, 180.0, ps);
       vSoft = clamp(aSize * 3.0, 0.0, 1.0);
-      gl_PointSize = min(ps, 900.0);
+      gl_PointSize = min(ps, 96.0);
     }`,
   fragment: /* glsl */ `
     varying float vA; varying float vB; varying float vSoft;
@@ -282,12 +286,17 @@ export const spray = {
 
 export const wake = {
   vertex: /* glsl */ `
-    attribute float aAge; varying vec2 vUv; varying float vAge;
-    void main(){ vUv = uv; vAge = aAge; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+    attribute float aAge; varying vec2 vUv; varying float vAge; varying float vView;
+    void main(){
+      vUv = uv; vAge = aAge;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      vView = -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }
   `,
   fragment: /* glsl */ `
     uniform sampler2D tFoam; uniform float uLight;
-    varying vec2 vUv; varying float vAge;
+    varying vec2 vUv; varying float vAge; varying float vView;
     void main(){
       float across = abs(vUv.x * 2.0 - 1.0);
       float warp = texture2D(tFoam, vec2(vUv.x * 0.7 + 0.13, vUv.y * 0.9)).r - 0.5;
@@ -300,9 +309,10 @@ export const wake = {
       float coreNear = (1.0 - smoothstep(0.0, 0.12, vAge)) * (1.0 - smoothstep(0.0, 0.45, across));
       float thr = mix(0.18, 0.5, vAge) + (1.0 - max(band, coreNear)) * 0.16;
       float a = smoothstep(thr - 0.05, thr + 0.2, n) * (1.0 - vAge * vAge) * smoothstep(0.0, 0.015, vAge);
-      a = max(a, 0.38 * band * (1.0 - vAge) * smoothstep(0.0, 0.015, vAge));
+      a = max(a, 0.16 * band * c * (1.0 - vAge) * smoothstep(0.0, 0.015, vAge));
       a *= 1.0 - smoothstep(0.72, 1.0, across);
-      gl_FragColor = vec4(vec3(0.95, 0.98, 1.0) * (1.15 * uLight), a * 0.92);
+      a *= smoothstep(0.25, 1.2, vView);
+      gl_FragColor = vec4(vec3(0.95, 0.98, 1.0) * (1.15 * uLight), a * 0.72);
     }`,
 };
 

@@ -16,7 +16,7 @@ import { catalog, grantReward, loadSave, owns, writeSave } from "./save.js";
 import { bindPanel, briefHTML, freeEndHTML, heatResultHTML, lockerHTML, menuHTML, mountUI, tourEndHTML } from "./ui.js";
 
 const canvas = document.getElementById("c");
-const world = createWorld(canvas);
+const world = await createWorld(canvas);
 const ride = createRide();
 const ui = mountUI();
 const save = loadSave();
@@ -70,6 +70,16 @@ function persist() {
   app.saveOk = writeSave(save);
 }
 
+function harmonizeOutfit() {
+  const bottom = byId[save.loadout.bottom];
+  if (!bottom) return;
+  if (save.loadout.body === "female" && bottom.style === "trunks" && owns(save, "bikini-teal")) {
+    save.loadout.bottom = "bikini-teal";
+    save.loadout.top = null;
+  }
+  if (save.loadout.body === "male" && bottom.style === "bikini") save.loadout.bottom = "trunks-red";
+}
+
 function applyLookout() {
   world.surfer.apply(save.loadout, byId);
   world.applyLook(app.cond.look || "day");
@@ -90,15 +100,27 @@ function show(html) {
       world.surfer.apply(save.loadout, byId);
       openLockerOrMenu();
     },
+    body: (id) => {
+      if (id !== "male" && id !== "female") return;
+      save.loadout.body = id;
+      harmonizeOutfit();
+      persist();
+      world.surfer.apply(save.loadout, byId);
+      enterMenu();
+    },
     equip: (id) => {
       const item = byId[id];
       if (!item || !owns(save, id)) return;
-      if (item.id === "male" || item.id === "female") save.loadout.body = item.id;
-      else if (item.style === "rash") save.loadout.top = item.id;
+      if (item.id === "male" || item.id === "female") {
+        save.loadout.body = item.id;
+        harmonizeOutfit();
+      } else if (item.style === "rash") save.loadout.top = item.id;
       else if (item.shape) save.loadout.board = item.id;
       else {
         save.loadout.bottom = item.id;
         if (item.style === "onesie" || item.style === "bikini") save.loadout.top = null;
+        if (item.style === "bikini") save.loadout.body = "female";
+        if (item.style === "trunks") save.loadout.body = "male";
       }
       persist();
       world.surfer.apply(save.loadout, byId);
@@ -515,6 +537,35 @@ window.__surf = {
   set pause(v) { app.pause = v; },
   setAutopilot(v) { app.auto = !!v; if (v) app.forced = null; },
   setInput(steer, thr) { app.auto = false; app.forced = { steer, thr }; },
+  setBody(id) {
+    if (id !== "male" && id !== "female") return;
+    save.loadout.body = id;
+    harmonizeOutfit();
+    world.surfer.apply(save.loadout, byId);
+    persist();
+  },
+  setSkin(color) {
+    save.loadout.skin = color;
+    world.surfer.apply(save.loadout, byId);
+    persist();
+  },
+  triggerWipe() {
+    ride.mode = "wipe";
+    ride.wipe = ride.t;
+    if (ride.stats) ride.stats.wipe = true;
+  },
+  closeCamera(dist = 2.05) {
+    const pos = ride.pos;
+    const ahead = ride.ahead;
+    const normal = ride.normal;
+    const lateral = ride.lateral;
+    const cam = world.camera;
+    cam.position.copy(pos).addScaledVector(ahead, -dist).addScaledVector(normal, 0.95).addScaledVector(lateral, 0.55);
+    cam.position.y += 0.35;
+    cam.up.set(0, 1, 0).lerp(normal, 0.4).normalize();
+    cam.lookAt(pos.clone().addScaledVector(normal, 0.72).addScaledVector(ahead, 0.15));
+    world.composer.render();
+  },
   startFree: () => startFree(),
   rideTour(n) {
     const tour = generateTour(n);
@@ -575,6 +626,15 @@ window.__surf = {
     wipe: !!ride.stats?.wipe,
   }),
   quality: () => world.quality,
+  meshes() {
+    const lines = [];
+    world.surfer.holder.traverse((obj) => {
+      if (!obj.isMesh) return;
+      const color = obj.material?.color?.getHexString?.() || "";
+      lines.push(`${obj.name} vis=${obj.visible} ${obj.material?.type || ""} #${color}`);
+    });
+    return lines;
+  },
 };
 
 requestAnimationFrame((now) => {

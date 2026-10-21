@@ -6,7 +6,7 @@ export default defineConfig({
     sourcemap: false,
     cssCodeSplit: false,
     target: "es2022",
-    chunkSizeWarningLimit: 2500,
+    chunkSizeWarningLimit: 8000,
     rolldownOptions: {
       output: {
         codeSplitting: false,

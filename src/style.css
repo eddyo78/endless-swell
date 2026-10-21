@@ -77,6 +77,10 @@ kbd { background: #ffffff26; border: 1px solid #ffffff4d; border-radius: 4px; pa
 .swatches { display: flex; gap: 6px; }
 .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid #fff4; padding: 0; }
 .swatch.on { border-color: #fff; box-shadow: 0 0 0 2px #2fe0c0; }
+.pickers { flex-wrap: wrap; }
+.bodybtns { display: flex; gap: 6px; }
+.bodybtn { border-radius: 999px; padding: 6px 14px; font-weight: 800; letter-spacing: .06em; }
+.bodybtn.on { border-color: #fff; box-shadow: 0 0 0 2px #2fe0c0; }
 .group { text-align: left; margin: 10px 0; }
 .group h3, .split h3 { margin: 0 0 6px; font-size: 12px; letter-spacing: .14em; font-weight: 700; opacity: .8; }
 .items { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
