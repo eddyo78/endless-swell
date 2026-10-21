@@ -1,8 +1,8 @@
 # Endless Swell
 
-A browser surfing game. One heavy reef break, an endless tour, and a surfer you dress yourself. No install — it runs in WebGL.
-
 **Play:** [https://eddyo78.github.io/endless-swell/](https://eddyo78.github.io/endless-swell/)
+
+A browser surfing game. One heavy reef break, an endless tour, and a surfer you dress yourself. No install — it runs in WebGL.
 
 ## Controls
 
