@@ -9,7 +9,7 @@
 // Then prints the win-odds table (INFERENCE: the proposal's player model, not measured play) for the design target.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { activeTwists, aiHeatTotal, createBracket, eventDials, generateTour, judgeWave, locationById, mulberry32, seasonCalendar, seasonTwist, stopStatus } from "../src/competition.js";
+import { activeTwists, aiHeatTotal, createBracket, eventDials, generateTour, judgeWave, locationById, mulberry32, seasonCalendar, seasonTwist, stopStatus, warmupFor } from "../src/competition.js";
 import { autopilot, createRide, resetRide, updateRide } from "../src/ride.js";
 import { SEASON_LENGTH, eventNumber, seasonEvent } from "../src/season.js";
 
@@ -346,6 +346,119 @@ ok("design target: a skilled player (avg 8) clears the top 4 about half the time
   assert.ok(top4(1, 1, 7) >= 0.9, `avg 7, season 1 event 1: ${top4(1, 1, 7)}`);
   assert.ok(top4(30, 1, 8) > top4(30, 10, 8), "the season start is easier than its Finale");
   assert.ok(top4(3, 9, 8) > top4(30, 9, 8), "the late seasons are harder than the early ones");
+});
+
+// ---- the Season 1 warm-up ------------------------------------------------------------------------------------------
+// Rival two-wave totals are measured with the game's own aiHeatTotal over every rival of the event (400 heats each). "Before"
+// is the same event with the warm-up scale off. The rider model is real ride.js + judgeWave (the ride is simulated at 60 Hz),
+// driven by a seeded bad rider: INFERENCE, not a human; real pass rates come back only with the play log (Shift+L).
+function rivalTotals(tour, seed) {
+  const rand = mulberry32(seed);
+  const xs = [];
+  for (let k = 0; k < 400; k++) for (const r of tour.rivals) xs.push(aiHeatTotal(r.skill, tour, rand).total);
+  xs.sort((a, b) => a - b);
+  const q = (p) => xs[Math.floor(p * (xs.length - 1))];
+  return { mean: mean(xs), p10: q(0.1), p90: q(0.9) };
+}
+const warm = Array.from({ length: SEASON_LENGTH }, (_, i) => {
+  const t = at(1, i + 1);
+  return { after: rivalTotals(t, 50 + i), before: rivalTotals({ ...t, rivalScale: 1 }, 50 + i) };
+});
+log("\nSeason 1 rival two-wave totals (the best two of the rival's waves; mean / 10th / 90th percentile), before and after the warm-up.");
+for (let i = 0; i < SEASON_LENGTH; i++) {
+  const f = (r) => `${r.mean.toFixed(2)} / ${r.p10.toFixed(1)} / ${r.p90.toFixed(1)}`;
+  log(`Event ${String(i + 1).padStart(2)}   before ${f(warm[i].before).padEnd(20)} after ${f(warm[i].after).padEnd(20)} scale ${warmupFor(1, i + 1).rivalScale}`);
+}
+ok("warm-up: the rival scale and the wipeout forgiveness apply to Season 1 only, the scale reaches 1 by Event 5, and every later event is the ordinary curve", () => {
+  const ev = tune.warmup.rivalScale.length;
+  assert.ok(ev <= 4 && warmupFor(1, ev + 1).rivalScale === 1, "the ordinary curve takes over by Event 5");
+  for (let e = 1; e < ev; e++) assert.ok(warmupFor(1, e).rivalScale < warmupFor(1, e + 1).rivalScale, `the scale rises from event ${e} to ${e + 1}`);
+  assert.ok(warmupFor(1, 1).rivalScale < 1);
+  for (const t of tours) {
+    const warmEvent = t.season === tune.warmup.season && t.event <= ev;
+    assert.equal(t.rivalScale < 1, warmEvent, `event ${t.n} rival scale ${t.rivalScale}`);
+    assert.equal(!!t.forgiveWipe, t.season === tune.warmup.season && t.event <= tune.warmup.forgiveEvents, `event ${t.n} forgiveness`);
+  }
+  assert.deepEqual({ ...at(1, 5), rivalScale: 1 }, at(1, 5));
+  // the dials the sawtooth sets are untouched: the warm-up changes only what the rivals score and how a first wipeout counts
+  assert.equal(at(1, 1).skill, eventDials(1, 1).skill);
+});
+ok("warm-up: rival two-wave totals rise from Event 1 to Event 5 with no jump, and from Event 5 are exactly what they were before", () => {
+  assert.ok(warm[0].after.mean <= 3.5, `Event 1 rival mean ${warm[0].after.mean}`);
+  assert.ok(warm[0].after.p90 <= 4.5, `Event 1 rival 90th percentile ${warm[0].after.p90}`);
+  for (let i = 1; i < 5; i++) {
+    const step = warm[i].after.mean - warm[i - 1].after.mean;
+    assert.ok(step > 0 && step <= 2.5, `Event ${i} to ${i + 1}: step ${step.toFixed(2)}`);
+  }
+  for (let i = 4; i < SEASON_LENGTH; i++) assert.equal(warm[i].after.mean, warm[i].before.mean, `Event ${i + 1} is unchanged`);
+  for (let i = 0; i < 4; i++) assert.ok(warm[i].after.mean < warm[i].before.mean, `Event ${i + 1} is softer than before`);
+});
+ok("warm-up: a forgiven wipeout scores what the ride earned (ride length, cap), an ordinary one stays capped, and a ridden wave is untouched", () => {
+  const tour = at(1, 1);
+  const forgive = tour.forgiveWipe;
+  const wiped = (seconds, extra = {}) => ({ samples: seconds * 60, speedSum: seconds * 60 * 9, speedSq: seconds * 60 * 82, maxSpeed: 11, sSum: seconds * 60 * 0.5, tubeTime: 0, deepTime: 0, committed: 0, pumps: 3, turns: 2, stalls: 0, clean: false, spit: false, wipe: true, ...extra });
+  const plain = judgeWave(wiped(8), tour);
+  const kind = judgeWave(wiped(8), tour, { forgive });
+  assert.equal(plain.total, 0, "an ordinary wipeout with no tube time scores nothing");
+  assert.ok(kind.forgiven && kind.wipe && kind.total > 1, `a forgiven 8 s wipeout earns something: ${kind.total}`);
+  assert.ok(kind.total <= forgive.cap);
+  assert.ok(judgeWave(wiped(2), tour, { forgive }).total < kind.total, "a shorter ride earns less");
+  assert.equal(kind.parts.exit, 0, "no exit bonus for a wipeout");
+  const ridden = { ...wiped(8), wipe: false, clean: true };
+  assert.deepEqual(judgeWave(ridden, tour, { forgive }), judgeWave(ridden, tour), "forgiveness never touches a wave that was ridden");
+  assert.ok(judgeWave(wiped(30, { tubeTime: 12, deepTime: 8 }), tour, { forgive }).total <= forgive.cap);
+});
+
+function poorHeat(tour, rand, forgiving) {
+  // three waves; each is "idle" (no input, wipes out) with chance 0.35, else steers like the autopilot and pumps for 2-6 s
+  const waves = [];
+  let limit = tour.waveCap;
+  let forgivenUsed = false;
+  for (let w = 0; w < limit; w++) {
+    const idle = rand() < 0.35;
+    const effort = 2 + rand() * 4;
+    const st = createRide();
+    resetRide(st, tour, { mode: "ride", z: -16, maxRide: 16 });
+    for (let i = 0; i < 60 * 20 && !st.ended; i++) {
+      const a = autopilot(st, tour);
+      const thr = idle ? 0 : st.t < effort ? (Math.sin(st.t * Math.PI * 2 * 2.4) > 0 ? 1 : 0) : 0;
+      updateRide(st, 1 / 60, { steer: idle ? 0 : a.steer, thr }, tour);
+    }
+    const useForgive = forgiving && !forgivenUsed && st.stats.wipe && tour.forgiveWipe ? tour.forgiveWipe : null;
+    const judged = judgeWave(st.stats, tour, { forgive: useForgive });
+    if (judged.forgiven) {
+      forgivenUsed = true;
+      limit += 1;
+    }
+    waves.push(judged.total);
+  }
+  waves.sort((a, b) => b - a);
+  return (waves[0] || 0) + (waves[1] || 0);
+}
+function passModel(n, forgiving, scaled, heats) {
+  const base = generateTour(n);
+  const tour = forgiving && scaled ? base : { ...base, rivalScale: 1, forgiveWipe: null };
+  const rand = mulberry32(900 + n);
+  let wins = 0;
+  for (let i = 0; i < heats; i++) {
+    const you = poorHeat(tour, rand, forgiving);
+    const rival = tour.rivals[i % tour.rivals.length];
+    const them = aiHeatTotal(rival.skill, tour, rand).total;
+    if (you > them || (you === them && rand() < 0.5)) wins++;
+  }
+  return wins / heats;
+}
+const poor = [1, 2, 3, 4].map((n) => ({ before: passModel(n, false, false, 160), after: passModel(n, true, true, 160) }));
+log("\nA bad rider (35% of waves no input at all and a wipeout; the rest pump for 2-6 s), INFERENCE. p = chance to win one heat; top 4 = p squared (two heats); passed within two tries = 1 - (1 - p^2)^2.");
+poor.forEach((r, i) => {
+  const f = (p) => `p ${p.toFixed(2)}  top 4 ${(p * p).toFixed(2)}  within two tries ${(1 - (1 - p * p) ** 2).toFixed(2)}`;
+  log(`Event ${i + 1}   before: ${f(r.before)}   after: ${f(r.after)}`);
+});
+ok("warm-up: a bad rider (wipes a third of the time, short pumping rides) wins an Event 1 heat at least 85% of the time and passes within two tries at least 95%, and is better off than before in Events 1-3", () => {
+  const p = poor[0].after;
+  assert.ok(p >= 0.85, `Event 1 heat win ${p}`);
+  assert.ok(1 - (1 - p * p) ** 2 >= 0.95, `Event 1 passed within two tries ${1 - (1 - p * p) ** 2}`);
+  for (let i = 0; i < 3; i++) assert.ok(poor[i].after >= poor[i].before, `Event ${i + 1}: ${poor[i].after} vs ${poor[i].before}`);
 });
 
 console.log(`tour checks passed (${checks} groups)`);

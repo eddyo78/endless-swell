@@ -375,6 +375,16 @@ export function autopilot(st, cond) {
 }
 
 /**
+ * A rider who is bad at this (the warm-up check drives it): the first wave of a heat gets no input at all and ends in a
+ * wipeout; every later wave steers like the autopilot and pumps for the first `effort` seconds, then coasts.
+ */
+export function poorAutopilot(st, cond, waveIndex, effort = 3) {
+  if (waveIndex === 0) return { steer: 0, thr: 0 };
+  const a = autopilot(st, cond);
+  return { steer: a.steer, thr: st.t < effort ? (Math.sin(st.t * Math.PI * 2 * 2.4) > 0 ? 1 : 0) : 0 };
+}
+
+/**
  * A point on the wave wall `reach` metres up the face from the board, in holder space (x across, y along the
  * face normal, z along the board), for the rear hand to trail through in the tube.
  */

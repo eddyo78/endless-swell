@@ -366,6 +366,134 @@ try {
     assert.deepEqual([...seen].sort(), ["locked", "soon"]);
     await c2.close();
   });
+  // ---- the warm-up and the play log (Ed, 2026-10-21) ------------------------------------------------------------------
+  // A bad rider (ride.js poorAutopilot: no input on the first wave of every heat, so it wipes out; short pumping effort after)
+  // plays the real Round of 16 and Quarterfinal of Season 1 Event 1 on four different draws (attempts 0-3).
+  {
+    const { page: p3, context: c3 } = await open(false);
+    const finishHeat = async () => {
+      let guard = 0;
+      while ((await S(p3, (s) => s.mode())) !== "result" && guard++ < 4000) await p3.evaluate(() => window.__surf.advance(1 / 4));
+      assert.equal(await S(p3, (s) => s.mode()), "result", "the heat ended");
+    };
+    const playTop4 = async (attempt) => {
+      await p3.evaluate((a) => {
+        const S = window.__surf;
+        S.save().attempt = a;
+        S.menu();
+      }, attempt);
+      await click(p3, "#play-tour");
+      await click(p3, "#begin-heat");
+      assert.deepEqual(await S(p3, (s) => [s.heat().round, s.heat().max, s.heat().limit]), ["Round of 16", 42, 3]);
+      await S(p3, (s) => s.setAutopilot(true, "poor"));
+      await finishHeat();
+      const first = await text(p3);
+      const heat1 = await S(p3, (s) => s.save().playLog.heats.at(-1));
+      assert.match(first, /Heat won/, `attempt ${attempt}: round of 16 lost, ${JSON.stringify(heat1)}`);
+      await S(p3, (s) => s.setAutopilot(false));
+      await click(p3, "#next-heat");
+      assert.equal((await S(p3, (s) => s.heat())).round, "Quarterfinal");
+      await S(p3, (s) => s.setAutopilot(true, "poor"));
+      await finishHeat();
+      const heat2 = await S(p3, (s) => s.save().playLog.heats.at(-1));
+      const second = await text(p3);
+      assert.match(second, /Top 4 secured/, `attempt ${attempt}: quarterfinal lost, ${JSON.stringify(heat2)}`);
+      await S(p3, (s) => s.setAutopilot(false));
+      return [heat1, heat2];
+    };
+    await ok("warm-up: a bad rider (wipes out the first wave of every heat, then short pumping rides) finishes top 4 in Season 1 · Event 1 on four different draws", async () => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const [h1, h2] = await playTop4(attempt);
+        console.log(`     attempt ${attempt + 1}: round of 16 ${h1.playerTotal} v ${h1.rivalTotal} (${h1.playerWaves.join(", ")}); quarterfinal ${h2.playerTotal} v ${h2.rivalTotal} (${h2.playerWaves.join(", ")})`);
+        assert.ok(h1.rivalTotal <= 6 && h2.rivalTotal <= 6, `Event 1 rivals are soft: ${h1.rivalTotal}, ${h2.rivalTotal}`);
+      }
+    });
+    await ok("warm-up: the first wipeout of a heat scores what it earned and the heat gives a fresh wave; a second wipeout is not forgiven", async () => {
+      await S(p3, (s) => s.menu());
+      await click(p3, "#play-tour");
+      await click(p3, "#begin-heat");
+      const waves = [];
+      let guard = 0;
+      while ((await S(p3, (s) => s.mode())) !== "result" && guard++ < 4000) {
+        // paddle in (throttle on), then no input at all in the ride: every wave wipes out
+        await p3.evaluate(() => window.__surf.setInput(0, window.__surf.mode() === "paddle" ? 1 : 0));
+        await p3.evaluate(() => window.__surf.advance(1 / 4));
+        const mode = await S(p3, (s) => s.mode());
+        if (mode === "gap") {
+          const heat = await S(p3, (s) => s.heat());
+          waves.push([heat.waves.length, heat.limit, heat.max]);
+          await p3.evaluate(() => window.__surf.advance(1.5));
+        }
+      }
+      await S(p3, (s) => s.setAutopilot(false));
+      const log = await S(p3, (s) => s.save().playLog.waves.slice(-5));
+      const mine = log.filter((w) => w.round === "Round of 16" && w.wipe);
+      assert.ok(mine.length >= 2, `at least two wipeouts logged: ${JSON.stringify(mine.map((w) => [w.score, w.forgiven]))}`);
+      assert.equal(mine[0].forgiven, true);
+      assert.ok(mine[0].score > 0, `the forgiven wipeout scored ${mine[0].score}`);
+      assert.equal(mine[1].forgiven, false, "only the first wipeout of a heat is forgiven");
+      assert.ok(mine[1].score < mine[0].score);
+      assert.deepEqual(waves[0].slice(1), [4, 54], `after the forgiven wipeout the heat has 4 waves and 54 s: ${JSON.stringify(waves)}`);
+    });
+    await ok("play log: waves and heats are recorded as played (season, event, round, score and parts, ride and tube time, wipe and cause, rival totals, placement) and survive a reload", async () => {
+      const log = await S(p3, (s) => s.save().playLog);
+      assert.equal(log.v, 1);
+      const w = log.waves.find((x) => x.round === "Quarterfinal" && !x.wipe);
+      assert.ok(w, "a ridden quarterfinal wave");
+      assert.deepEqual([w.season, w.event, w.round], [1, 1, "Quarterfinal"]);
+      assert.ok(w.score > 0 && w.rideSeconds > 1 && "tube" in w.parts && "speed" in w.parts && typeof w.tubeSeconds === "number");
+      const wipe = log.waves.find((x) => x.wipe);
+      assert.ok(wipe && /\S/.test(wipe.cause), "a wipeout has its cause");
+      const h = log.heats.at(-2);
+      assert.ok(h.rival && h.rivalTotal > 0 && h.playerTotal > 0 && Array.isArray(h.playerWaves) && Array.isArray(h.rivalWaves) && typeof h.won === "boolean");
+      // bank the top 4 and see the event placement land on the last heat
+      await S(p3, (s) => s.startTour());
+      await S(p3, (s) => s.forceFinish(4));
+      assert.equal((await S(p3, (s) => s.save().playLog.heats.at(-1))).eventPlace, 4);
+      const before = await S(p3, (s) => s.save().playLog);
+      await p3.reload({ waitUntil: "load" });
+      await p3.waitForFunction(() => window.__surf && window.__surf.ready, { timeout: 120000 });
+      assert.deepEqual(await S(p3, (s) => s.save().playLog), before, "the log survives a reload");
+      await p3.evaluate(() => {
+        window.__surf.pause = true;
+      });
+    });
+    await ok("play log: Shift+L downloads the log as a JSON file with the same waves and heats", async () => {
+      await p3.evaluate(() => {
+        window.__dl = [];
+        const orig = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function () {
+          if (this.download) {
+            window.__dl.push({ name: this.download, href: this.href });
+            return undefined;
+          }
+          return orig.call(this);
+        };
+      });
+      await p3.keyboard.down("Shift");
+      await p3.keyboard.press("KeyL");
+      await p3.keyboard.up("Shift");
+      const got = await p3.evaluate(async () => {
+        const d = window.__dl[0];
+        return d ? { name: d.name, text: await (await fetch(d.href)).text() } : null;
+      });
+      assert.ok(got, "a file was offered for download");
+      assert.match(got.name, /^endless-swell-playlog-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
+      const file = JSON.parse(got.text);
+      const hook = await S(p3, (s) => s.exportLog());
+      assert.equal(file.game, "endless-swell");
+      assert.deepEqual(file.waves, hook.waves);
+      assert.deepEqual(file.heats, hook.heats);
+      assert.ok(file.waves.length >= 6 && file.heats.length >= 3, `${file.waves.length} waves, ${file.heats.length} heats exported`);
+      // a plain L (no Shift) does nothing
+      await p3.evaluate(() => {
+        window.__dl = [];
+      });
+      await p3.keyboard.press("KeyL");
+      assert.equal(await p3.evaluate(() => window.__dl.length), 0);
+    });
+    await c3.close();
+  }
   await ok("no page errors or console errors in the whole run", async () => {
     assert.deepEqual(problems, []);
   });

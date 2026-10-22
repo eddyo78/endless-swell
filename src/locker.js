@@ -3,7 +3,7 @@
 // Everything is drawn with the game's own renderer (one WebGL context: a second one would copy every texture) into render
 // targets this module creates when the Locker opens and disposes when it closes:
 //   - the preview: the active body wearing the loadout on its board, standing on a turntable under a neutral studio light
-//     (a key, a fill and a rim light, a grey room for the reflections, Khronos neutral tone mapping), drawn into the stage
+//     (a key, a fill and a rim light, a grey room for the reflections, linear tone mapping (no toe: dark saturated cloth keeps its colour)), drawn into the stage
 //     rectangle of the page. It turns slowly; a drag turns it by hand.
 //   - the thumbnails: 2x2 supersampled, rendered one at a time into a small target, read back, downscaled into a 160 px
 //     canvas and cached (module level, least recently used, bounded). A board is shown from above; an outfit is the garment
@@ -18,7 +18,7 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { GARMENTS, applyPose } from "./surfer.js";
 import { defaultBottom, isBody } from "./save.js";
 import { dropPrintsExcept, printCacheKeys } from "./printart.js";
-import { itemFlag, lockerFine, lockerListHTML, lockerShellHTML } from "./ui.js";
+import { itemFlag, lockerFine, lockerListHTML, lockerShellHTML, lockerSkinHTML } from "./ui.js";
 
 export const THUMB_PX = 160; // stored picture, square
 const THUMB_SUPER = 2; // rendered at this multiple, then downscaled
@@ -186,7 +186,8 @@ function disposeStudio(studio) {
 // ---- the Locker ---------------------------------------------------------------------------------------------------------
 
 /**
- * Open the Locker in `panels`. ctx: { world, save, byId, panels, equip(id) -> boolean (wear an owned item and save), back() }.
+ * Open the Locker in `panels`. ctx: { world, save, byId, panels, equip(id) -> boolean (wear an owned item and save), skin(hex) (set the
+ * loadout skin and save), back() }.
  * Returns the view; the caller calls view.frame() instead of the world's render while it is open and view.close() to leave.
  */
 export function openLockerView(ctx) {
@@ -201,6 +202,7 @@ export function openLockerView(ctx) {
   const listEl = panels.querySelector("#lk-list");
   const badgeEl = panels.querySelector("#lk-badge");
   const fineEl = panels.querySelector("#lk-fine");
+  const skinEl = panels.querySelector("#lk-skin");
   const backEl = panels.querySelector("#locker-back");
 
   // what to put back
@@ -214,7 +216,8 @@ export function openLockerView(ctx) {
   };
 
   const studio = buildStudio(renderer);
-  renderer.toneMapping = THREE.NeutralToneMapping;
+  surfer.studio = true; // skin and cloth gains fitted to the neutral studio light (restored in close)
+  renderer.toneMapping = THREE.LinearToneMapping;
   renderer.toneMappingExposure = 1;
   const outputPass = new OutputPass();
   const camera = new THREE.PerspectiveCamera(26, 1, 0.05, 60);
@@ -398,6 +401,7 @@ export function openLockerView(ctx) {
     const scroll = listEl.scrollTop;
     if (observer) observer.disconnect();
     listEl.innerHTML = lockerListHTML(save, sel);
+    skinEl.innerHTML = lockerSkinHTML(save);
     fineEl.textContent = lockerFine(save);
     listEl.scrollTop = scroll;
     const cards = [...listEl.querySelectorAll(".item")];
@@ -469,6 +473,16 @@ export function openLockerView(ctx) {
   stageEl.addEventListener("pointerup", onUp);
   stageEl.addEventListener("pointercancel", onUp);
   listEl.addEventListener("click", onListClick);
+  // a skin swatch: saved like the menu's picker; the preview and every picture that shows skin follow at once
+  const onSkin = (e) => {
+    const swatch = e.target.closest("[data-skin]");
+    if (!swatch) return;
+    ctx.skin(swatch.dataset.skin);
+    previewLoadout.skin = save.loadout.skin;
+    previewDirty = true;
+    buildList();
+  };
+  skinEl.addEventListener("click", onSkin);
   const onBack = () => ctx.back();
   backEl.addEventListener("click", onBack);
 
@@ -693,6 +707,7 @@ export function openLockerView(ctx) {
     stageEl.removeEventListener("pointerup", onUp);
     stageEl.removeEventListener("pointercancel", onUp);
     listEl.removeEventListener("click", onListClick);
+    skinEl.removeEventListener("click", onSkin);
     backEl.removeEventListener("click", onBack);
     if (observer) observer.disconnect();
     observer = null;
@@ -700,6 +715,7 @@ export function openLockerView(ctx) {
     queued.clear();
     // the surfer first: back to the game's scene and dressing, then drop the masks the pictures drew
     restoreSurfer(surfer, snap);
+    surfer.studio = false;
     surfer.apply(save.loadout, byId);
     const onShow = new Set([surfer.materials.boardMat.map]);
     for (const rig of [surfer.male, surfer.female]) for (const name of GARMENTS[rig.kind]) onShow.add(rig.meshes[name].material.map);

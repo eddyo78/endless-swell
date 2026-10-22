@@ -18,14 +18,99 @@ const FOOT_CENTRE_FROM_ANKLE = 0.07; // the ankle bone sits this far behind the 
 // the material. The skin table was fitted in the browser (scripts/skin-calibrate.mjs, day look): for each catalog tone,
 // the factor that makes the sunlit skin render as its hex. Other hexes interpolate by luminance. The skin colour map is a
 // detail map whose mean sits at 60% (scripts/build-surfers.mjs SKIN_LEVEL), which is why the factors are above 1.
-const SKIN_COMP = [
+const skinTable = (rows) => rows.map(([hex, comp]) => ({ lum: new THREE.Color(hex).getHSL({}).l, comp }));
+const SKIN_COMP = skinTable([
   ["#3b2418", [2.829, 2.057, 0.396]],
   ["#6e3a22", [2.117, 1.834, 0.817]],
   ["#8d5524", [1.921, 1.532, 0.661]],
   ["#c68642", [2.029, 1.257, 0.735]],
   ["#e0ac69", [2.464, 1.294, 0.777]],
   ["#f1c27d", [3.286, 1.417, 0.649]],
-].map(([hex, comp]) => ({ lum: new THREE.Color(hex).getHSL({}).l, comp }));
+]);
+// The same, fitted in the Locker's neutral studio light (scripts/studio-calibrate.mjs fit): the wave scene's gains above cancel its
+// cool blue light and would turn skin and cloth orange under a neutral one. surfer.studio switches to these while the Locker is open.
+const STUDIO_SKIN_COMP = skinTable([
+["#3b2418", [1.302, 0.865, 0.303]],   // target 59,36,24 measured 59,36,25
+  ["#6e3a22", [1.624, 1.381, 0.854]],   // target 110,58,34 measured 110,58,34
+  ["#8d5524", [1.676, 1.573, 0.962]],   // target 141,85,36 measured 141,85,36
+  ["#c68642", [1.728, 1.691, 1.456]],   // target 198,134,66 measured 198,134,66
+  ["#e0ac69", [1.994, 2.069, 2.074]],   // target 224,172,105 measured 224,172,105
+  ["#f1c27d", [2.01, 2.083, 2.099]],   // target 241,194,125 measured 241,194,125
+]);
+const STUDIO_CLOTH_FIT = [
+["#c41622", [0.633, 0.431, 0.54]],   // target 196,22,34 measured 196,22,34
+  ["#7a0610", [0.608, 0.05, 0.354]],   // target 122,6,16 measured 122,8,16
+  ["#16324a", [0.431, 0.586, 0.623]],   // target 22,50,74 measured 22,50,74
+  ["#0c1c2c", [0.24, 0.503, 0.577]],   // target 12,28,44 measured 12,28,44
+  ["#0e6b4c", [0.294, 0.633, 0.632]],   // target 14,107,76 measured 14,107,76
+  ["#d8ffe4", [0.627, 0.8, 0.655]],   // target 216,255,228 measured 216,255,228
+  ["#f4f1ea", [0.629, 0.643, 0.655]],   // target 244,241,234 measured 244,241,234
+  ["#e23b2f", [0.626, 0.607, 0.6]],   // target 226,59,47 measured 226,59,47
+  ["#14b8b0", [0.404, 0.641, 0.651]],   // target 20,184,176 measured 20,184,176
+  ["#063e42", [0.05, 0.606, 0.616]],   // target 6,62,66 measured 9,62,66
+  ["#ff6a3d", [0.901, 0.634, 0.622]],   // target 255,106,61 measured 255,106,61
+  ["#ffd0a8", [0.9, 0.643, 0.653]],   // target 255,208,168 measured 255,208,168
+  ["#f3f6f8", [0.628, 0.646, 0.662]],   // target 243,246,248 measured 243,246,248
+  ["#9fd6ea", [0.623, 0.643, 0.655]],   // target 159,214,234 measured 159,214,234
+  ["#123a40", [0.366, 0.601, 0.615]],   // target 18,58,64 measured 18,58,64
+  ["#3ddc97", [0.589, 0.642, 0.651]],   // target 61,220,151 measured 61,220,151
+  ["#e6b422", [0.627, 0.642, 0.554]],   // target 230,180,34 measured 230,180,34
+  ["#0a1330", [0.171, 0.408, 0.586]],   // target 10,19,48 measured 10,19,48
+  ["#1b3f73", [0.475, 0.611, 0.65]],   // target 27,63,115 measured 27,63,115
+  ["#8fd0ff", [0.621, 0.643, 0.739]],   // target 143,208,255 measured 143,208,255
+  ["#141418", [0.411, 0.423, 0.477]],   // target 20,20,24 measured 20,20,24
+  ["#3a3a44", [0.592, 0.604, 0.624]],   // target 58,58,68 measured 58,58,68
+  ["#0f8f8a", [0.315, 0.638, 0.648]],   // target 15,143,138 measured 15,143,138
+  ["#e8574a", [0.626, 0.627, 0.633]],   // target 232,87,74 measured 232,87,74
+  ["#fff1e6", [0.9, 0.643, 0.654]],   // target 255,241,230 measured 255,241,230
+  ["#f4ecd8", [0.629, 0.643, 0.654]],   // target 244,236,216 measured 244,236,216
+  ["#4a3a24", [0.609, 0.604, 0.548]],   // target 74,58,36 measured 74,58,36
+  ["#1f7fbf", [0.513, 0.636, 0.651]],   // target 31,127,191 measured 31,127,191
+  ["#e9f6ff", [0.628, 0.646, 0.732]],   // target 233,246,255 measured 233,246,255
+  ["#2a7d4f", [0.558, 0.636, 0.634]],   // target 42,125,79 measured 42,125,79
+  ["#f0f7d8", [0.628, 0.648, 0.654]],   // target 240,247,216 measured 240,247,216
+  ["#f0562c", [0.626, 0.626, 0.593]],   // target 240,86,44 measured 240,86,44
+  ["#4a1f3d", [0.606, 0.514, 0.611]],   // target 74,31,61 measured 74,31,61
+  ["#e9eef2", [0.627, 0.643, 0.655]],   // target 233,238,242 measured 233,238,242
+  ["#3b4a57", [0.591, 0.621, 0.638]],   // target 59,74,87 measured 59,74,87
+  ["#d6dde3", [0.627, 0.643, 0.655]],   // target 214,221,227 measured 214,221,227
+  ["#f2b632", [0.627, 0.642, 0.605]],   // target 242,182,50 measured 242,182,50
+  ["#27323a", [0.547, 0.587, 0.607]],   // target 39,50,58 measured 39,50,58
+  ["#d2386c", [0.626, 0.603, 0.645]],   // target 210,56,108 measured 210,56,108
+  ["#ffe3ec", [0.9, 0.643, 0.654]],   // target 255,227,236 measured 255,227,236
+  ["#5b4aa6", [0.612, 0.621, 0.65]],   // target 91,74,166 measured 91,74,166
+  ["#f3d9ff", [0.628, 0.643, 0.733]],   // target 243,217,255 measured 243,217,255
+  ["#7d8a8c", [0.619, 0.638, 0.65]],   // target 125,138,140 measured 125,138,140
+  ["#f1e6d4", [0.627, 0.643, 0.654]],   // target 241,230,212 measured 241,230,212
+  ["#8fcf4a", [0.62, 0.643, 0.633]],   // target 143,207,74 measured 143,207,74
+  ["#13261b", [0.396, 0.553, 0.502]],   // target 19,38,27 measured 19,38,27
+  ["#4fc6d6", [0.603, 0.642, 0.654]],   // target 79,198,214 measured 79,198,214
+  ["#08323f", [0.087, 0.584, 0.609]],   // target 8,50,63 measured 9,50,63
+  ["#e0328c", [0.626, 0.593, 0.65]],   // target 224,50,140 measured 224,50,140
+  ["#2a0b27", [0.551, 0.215, 0.563]],   // target 42,11,39 measured 42,11,39
+  ["#ff7a1a", [0.9, 0.636, 0.508]],   // target 255,122,26 measured 255,122,26
+  ["#0b6b72", [0.202, 0.633, 0.644]],   // target 11,107,114 measured 11,107,114
+  ["#7a3df0", [0.62, 0.61, 0.652]],   // target 122,61,240 measured 122,61,240
+  ["#e4d9ff", [0.627, 0.643, 0.734]],   // target 228,217,255 measured 228,217,255
+  ["#c8182d", [0.631, 0.46, 0.586]],   // target 200,24,45 measured 200,24,45
+  ["#f6e8e2", [0.631, 0.643, 0.655]],   // target 246,232,226 measured 246,232,226
+  ["#4fd1a5", [0.602, 0.643, 0.653]],   // target 79,209,165 measured 79,209,165
+  ["#0c3a3d", [0.221, 0.6, 0.61]],   // target 12,58,61 measured 12,58,61
+  ["#17234d", [0.447, 0.541, 0.62]],   // target 23,35,77 measured 23,35,77
+  ["#7fc4ff", [0.618, 0.643, 0.739]],   // target 127,196,255 measured 127,196,255
+  ["#ff4a1c", [0.901, 0.621, 0.525]],   // target 255,74,28 measured 255,74,28
+  ["#1a0a08", [0.477, 0.178, 0.097]],   // target 26,10,8 measured 26,10,9
+  ["#2fbfae", [0.567, 0.642, 0.652]],   // target 47,191,174 measured 47,191,174
+  ["#2a1466", [0.553, 0.419, 0.629]],   // target 42,20,102 measured 42,20,102
+  ["#14101f", [0.412, 0.354, 0.529]],   // target 20,16,31 measured 20,16,31
+  ["#ff3d9a", [0.902, 0.61, 0.649]],   // target 255,61,154 measured 255,61,154
+  ["#dff6ff", [0.627, 0.646, 0.732]],   // target 223,246,255 measured 223,246,255
+  ["#1e6fb0", [0.507, 0.634, 0.65]],   // target 30,111,176 measured 30,111,176
+  ["#c45cf2", [0.626, 0.629, 0.655]],   // target 196,92,242 measured 196,92,242
+  ["#201a3a", [0.515, 0.488, 0.602]],   // target 32,26,58 measured 32,26,58
+  ["#1c0a24", [0.491, 0.179, 0.553]],   // target 28,10,36 measured 28,10,36
+  ["#ff8a3c", [0.9, 0.638, 0.621]],   // target 255,138,60 measured 255,138,60
+].map(([hex, comp]) => ({ rgb: new THREE.Color(hex), comp }));
 // Cloth is compensated the same way, per colour: a fitted gain for every catalog cloth colour (scripts/cloth-calibrate.mjs,
 // day look, refitted 2026-10-21 on the women's rashguard with the cloth light ceiling of src/printmat.js), so a "gold" rashguard renders gold. A colour that is not in the table (earned gear with generated colours,
 // milestone 4) takes an inverse-distance blend of the fitted gains of the colours near it; CLOTH_COMP is the gain used
@@ -110,16 +195,17 @@ const CLOTH_FIT = [
 ].map(([hex, comp]) => ({ rgb: new THREE.Color(hex), comp }));
 
 // Calibration overrides, shared by the module's colour functions and exposed as surfer.tune.
-const TUNE = { skin: null, clothOverride: null, cloth: new THREE.Color(...CLOTH_COMP), board: new THREE.Color(...BOARD_COMP) };
+const TUNE = { studio: false, skin: null, clothOverride: null, cloth: new THREE.Color(...CLOTH_COMP), board: new THREE.Color(...BOARD_COMP) };
 
 function clothComp(color, out) {
   if (TUNE.clothOverride) return out.copy(TUNE.clothOverride);
-  if (!CLOTH_FIT.length) return out.copy(TUNE.cloth);
+  const table = TUNE.studio ? STUDIO_CLOTH_FIT : CLOTH_FIT;
+  if (!table.length) return out.copy(TUNE.cloth);
   let wsum = 0;
   let r = 0;
   let g = 0;
   let b = 0;
-  for (const e of CLOTH_FIT) {
+  for (const e of table) {
     const d2 = (e.rgb.r - color.r) ** 2 + (e.rgb.g - color.g) ** 2 + (e.rgb.b - color.b) ** 2;
     if (d2 < 1e-6) return out.setRGB(...e.comp);
     const w = 1 / (d2 + 0.002) ** 2;
@@ -132,9 +218,8 @@ function clothComp(color, out) {
 }
 const _cc = new THREE.Color();
 
-function skinComp(color, out) {
+function skinComp(color, out, t = SKIN_COMP) {
   const l = color.getHSL({}).l;
-  const t = SKIN_COMP;
   if (l <= t[0].lum) return out.setRGB(...t[0].comp);
   if (l >= t[t.length - 1].lum) return out.setRGB(...t[t.length - 1].comp);
   let i = 0;
@@ -948,6 +1033,13 @@ export async function createSurfer({ textures: loadTextures = true } = {}) {
     },
     textures: tex,
     tune: TUNE,
+    /** The Locker's neutral studio light is on (src/locker.js): skin and cloth use the studio gains. Call apply() after changing it. */
+    get studio() {
+      return TUNE.studio;
+    },
+    set studio(on) {
+      TUNE.studio = !!on;
+    },
     /** Test hook (scripts/cloth-calibrate.mjs): paint one garment mesh of the active body in a single colour. */
     paintSolid(meshName, hex) {
       const mesh = surfer.active.meshes[meshName];
@@ -973,7 +1065,7 @@ export async function createSurfer({ textures: loadTextures = true } = {}) {
       skin.color.set(loadout.skin || "#6e3a22");
       skin.sheenColor.copy(skin.color).offsetHSL(0.01, 0.05, 0.06);
       skin.map = tex.skin[rig.kind][skinFamily(skin.color)];
-      skin.color.multiply(surfer.tune.skin || skinComp(skin.color, _comp));
+      skin.color.multiply(surfer.tune.skin || skinComp(skin.color, _comp, TUNE.studio ? STUDIO_SKIN_COMP : SKIN_COMP));
       boardMat.color.copy(surfer.tune.board);
       skin.emissive.copy(skin.color).multiplyScalar(0.012);
 

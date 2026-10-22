@@ -6,6 +6,8 @@
 //     not blank (enough pixels differ from the card's own backdrop);
 //   - the preview renders (the stage area is not a flat colour) and the whole surfer is inside the frame: the head has at least 6%
 //     of the stage above it and the plate and its sides are inside (projected extents, window.__surf.locker().state().fit);
+//   - the skin swatches in the Locker change the tone, save it and repaint the preview and the body cards; and skin (six tones) and
+//     cloth (every catalog and gear colour) measure as their swatches in the studio light (runs scripts/studio-calibrate.mjs check);
 //   - trying on every locked premium card previews it (badge says LOCKED, the preview loadout and the dressed meshes carry it) and
 //     does NOT equip it: the loadout and the saved game are unchanged; clicking an owned card does equip and save it;
 //   - closing disposes what the Locker created: after one warm-up open and close (the other body's textures upload once), the
@@ -84,7 +86,7 @@ const TRACK_LISTENERS = () => {
     for (const [target, keys] of live) {
       const own = target === window || target === document || (target.isConnected && !(target.closest && target.closest("#panels")));
       if (own) persistent += keys.size;
-      if (target.id === "lk-view" || target.id === "lk-list" || target.id === "locker-back") locker += keys.size;
+      if (target.id === "lk-view" || target.id === "lk-list" || target.id === "lk-skin" || target.id === "locker-back") locker += keys.size;
     }
     return { persistent, locker };
   };
@@ -247,6 +249,24 @@ try {
       assert.equal(after.state.trying, false);
     });
 
+    await ok(`${c.name}: the Locker's skin swatches change the tone, save it, and repaint the preview and the body cards`, async () => {
+      const tones = await page.evaluate(() => [...document.querySelectorAll("#lk-skin .swatch")].map((b) => b.dataset.skin));
+      assert.equal(tones.length, 6, `${tones.length} swatches`);
+      const current = await page.evaluate(() => window.__surf.save().loadout.skin);
+      const next = tones.find((t) => t.toLowerCase() !== current.toLowerCase());
+      const bodyCardBefore = await page.evaluate(() => document.querySelector('#lk-list [data-equip="male"] canvas').toDataURL());
+      await page.click(`#lk-skin [data-skin="${next}"]`);
+      await page.waitForFunction(() => window.__surf.locker().pending === 0, { timeout: 60000 });
+      await frames(page, 4);
+      const got = await page.evaluate(() => ({ loadout: window.__surf.save().loadout.skin, stored: JSON.parse(localStorage.getItem("endless-swell-save-v2")).loadout.skin, preview: window.__surf.locker().state().previewLoadout.skin, on: document.querySelector("#lk-skin .swatch.on")?.dataset.skin, worn: window.__surf.surfer().materials.skin.color.getHexString() }));
+      assert.equal(got.loadout.toLowerCase(), next.toLowerCase());
+      assert.equal(got.stored.toLowerCase(), next.toLowerCase(), "the tone was not saved");
+      assert.equal(got.preview.toLowerCase(), next.toLowerCase());
+      assert.equal(got.on.toLowerCase(), next.toLowerCase(), "the swatch is not marked");
+      const bodyCardAfter = await page.evaluate(() => document.querySelector('#lk-list [data-equip="male"] canvas').toDataURL());
+      assert.notEqual(bodyCardAfter, bodyCardBefore, "the body card was not repainted for the new tone");
+    });
+
     if (c.name === "male, desktop") {
       await ok("closing disposes what the Locker made: counts, listeners, tone mapping and the holder are identical after each open and close", async () => {
         await closeLocker(page);
@@ -273,6 +293,12 @@ try {
     }
     await context.close();
   }
+  await ok("skin (all six tones) and cloth (every catalog and gear-table colour) read as their swatches in the Locker's studio light (scripts/studio-calibrate.mjs check)", async () => {
+    const r = spawnSync(process.execPath, [join(root, "scripts", "studio-calibrate.mjs"), "check"], { cwd: root, encoding: "utf8" });
+    const lines = r.stdout.split("\n").filter((l) => /within tolerance|OUT/.test(l));
+    console.log(lines.map((l) => `     ${l}`).join("\n"));
+    assert.equal(r.status, 0, `studio calibration is out of tolerance:\n${r.stdout}${r.stderr}`);
+  });
   await ok("no page errors or console errors in the whole run", async () => {
     assert.deepEqual(problems, []);
   });

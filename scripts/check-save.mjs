@@ -6,11 +6,18 @@
 import assert from "node:assert/strict";
 import {
   LEGACY_SAVE_KEY,
+  PLAYLOG_MAX_HEATS,
+  PLAYLOG_MAX_WAVES,
+  PLAYLOG_VERSION,
   SAVE_KEY,
   catalog,
   defaultSave,
+  exportPlayLog,
   grantReward,
   loadSave,
+  logEventPlace,
+  logHeat,
+  logWave,
   sanitize,
   settleFinish,
   switchBody,
@@ -282,6 +289,110 @@ ok("the authored reward pieces still arrive first, then generated gear takes ove
   const authoredCommon = catalog.outfits.concat(catalog.boards).filter((i) => i.reward === "common" && (!i.body || i.body === "male")).map((i) => i.id);
   assert.deepEqual(got.slice(0, authoredCommon.length).map((i) => i.id).sort(), authoredCommon.slice().sort());
   assert.ok(got.slice(authoredCommon.length).every((i) => i.generated));
+});
+
+// ---- the play log (Ed, 2026-10-21: tune the difficulty from real play) -------------------------------------------------
+const waveRec = (i, extra = {}) => ({
+  at: 1000 + i, season: 1, event: 1, attempt: 0, round: "Round of 16", wave: 1 + (i % 3), score: 3.4, parts: { tube: 0, commit: 0.4, speed: 0.9, flow: 1.1, variety: 0.8, exit: 0.2, spit: 0 },
+  rideSeconds: 9.83, tubeSeconds: 0, wipe: false, cause: null, forgiven: false, interference: false, clean: false, spit: false, ...extra,
+});
+const heatRec = (i, extra = {}) => ({
+  at: 2000 + i, season: 1, event: 1, attempt: 0, round: "Round of 16", rival: "Kai Mendes", rivalSkill: 0.16, playerTotal: 6.4, rivalTotal: 3.1,
+  playerWaves: [1.6, 3.2, 3.2], rivalWaves: [1.4, 1.7, 1.2], won: true, place: null, ...extra,
+});
+ok("play log: a new save has an empty versioned log; an old save with no log (version 1 and version 2) loads with one and does not crash", () => {
+  assert.deepEqual(defaultSave().playLog, { v: PLAYLOG_VERSION, waves: [], heats: [] });
+  const { playLog, ...oldV2 } = JSON.parse(JSON.stringify(defaultSave()));
+  assert.equal(playLog.v, PLAYLOG_VERSION);
+  assert.deepEqual(sanitize(oldV2).playLog, { v: PLAYLOG_VERSION, waves: [], heats: [] });
+  assert.deepEqual(sanitize(JSON.parse(JSON.stringify(V1))).playLog, { v: PLAYLOG_VERSION, waves: [], heats: [] });
+  store.clear();
+  store.set(SAVE_KEY, JSON.stringify(oldV2));
+  assert.deepEqual(loadSave().playLog.waves, []);
+  const exported = exportPlayLog(sanitize(oldV2));
+  assert.deepEqual([exported.waves, exported.heats], [[], []]);
+});
+ok("play log: waves and heats round-trip through the real writeSave/loadSave with every field", () => {
+  store.clear();
+  const s = defaultSave();
+  const w1 = logWave(s, waveRec(1));
+  const w2 = logWave(s, waveRec(2, { wipe: true, cause: "Closed out — the lip got you", forgiven: true, score: 1.6, parts: { tube: 0, commit: 0, speed: 0.46, flow: 1.14, variety: 0, exit: 0, spit: 0, lengthScale: 1, partial: 0 }, rideSeconds: 8, interference: true }));
+  const h1 = logHeat(s, heatRec(1));
+  logEventPlace(s, 4);
+  assert.equal(s.playLog.waves.length, 2);
+  assert.equal(s.playLog.heats[0].eventPlace, 4);
+  assert.deepEqual(w1.parts, waveRec(1).parts);
+  assert.equal(h1.rival, "Kai Mendes");
+  assert.ok(writeSave(s));
+  const back = loadSave();
+  assert.deepEqual(back.playLog, s.playLog);
+  assert.deepEqual(back.playLog.waves[1], w2);
+  assert.equal(back.playLog.waves[1].cause, "Closed out — the lip got you");
+  assert.equal(back.playLog.waves[1].forgiven, true);
+  assert.equal(back.playLog.heats[0].won, true);
+  assert.deepEqual(back.playLog.heats[0].playerWaves, [1.6, 3.2, 3.2]);
+  assert.deepEqual(sanitize(JSON.parse(JSON.stringify(back))), back, "sanitize is idempotent on a save with a log");
+  assert.equal(logEventPlace(defaultSave(), 4), null, "no heat to stamp on a fresh save");
+});
+ok(`play log: capped at the last ${PLAYLOG_MAX_WAVES} waves and ${PLAYLOG_MAX_HEATS} heats, in memory and after a reload, oldest dropped first`, () => {
+  assert.equal(PLAYLOG_MAX_WAVES, 500);
+  const s = defaultSave();
+  for (let i = 1; i <= PLAYLOG_MAX_WAVES + 37; i++) logWave(s, waveRec(i));
+  for (let i = 1; i <= PLAYLOG_MAX_HEATS + 9; i++) logHeat(s, heatRec(i));
+  assert.equal(s.playLog.waves.length, PLAYLOG_MAX_WAVES);
+  assert.equal(s.playLog.heats.length, PLAYLOG_MAX_HEATS);
+  assert.equal(s.playLog.waves[0].at, 1000 + 38);
+  assert.equal(s.playLog.waves.at(-1).at, 1000 + PLAYLOG_MAX_WAVES + 37);
+  assert.equal(s.playLog.heats[0].at, 2000 + 10);
+  // a hand-edited or oversized stored log is trimmed on load
+  const big = JSON.parse(JSON.stringify(s));
+  for (let i = 0; i < 100; i++) big.playLog.waves.unshift(waveRec(-i));
+  const loaded = sanitize(big);
+  assert.equal(loaded.playLog.waves.length, PLAYLOG_MAX_WAVES);
+  assert.equal(loaded.playLog.waves.at(-1).at, s.playLog.waves.at(-1).at);
+  store.clear();
+  assert.ok(writeSave(s));
+  assert.equal(loadSave().playLog.waves.length, PLAYLOG_MAX_WAVES);
+  const bytes = store.get(SAVE_KEY).length;
+  assert.ok(bytes < 600000, `a full log keeps the save small enough for localStorage: ${bytes} bytes`);
+  console.log(`     a save with a full log is ${bytes} bytes`);
+});
+ok("play log: damaged or foreign logs load as an empty log or drop the bad records, never crash and never touch progress", () => {
+  const base = JSON.parse(JSON.stringify(defaultSave()));
+  const progress = { season: 4, event: 6, attempt: 2, points: 333 };
+  for (const bad of [null, "log", 7, [], { v: 99, waves: [waveRec(1)], heats: [] }, { v: PLAYLOG_VERSION, waves: "x", heats: 5 }, { waves: [waveRec(1)] }]) {
+    const s = sanitize({ ...base, ...progress, playLog: bad });
+    assert.deepEqual(s.playLog, { v: PLAYLOG_VERSION, waves: [], heats: [] }, JSON.stringify(bad));
+    assert.deepEqual({ season: s.season, event: s.event, attempt: s.attempt, points: s.points }, progress);
+  }
+  const mixed = sanitize({ ...base, playLog: { v: PLAYLOG_VERSION, waves: [null, 5, "x", waveRec(1, { score: "nine", parts: { tube: "a", speed: 1.234 }, season: "1" }), waveRec(2)], heats: [undefined, heatRec(1, { playerWaves: [1, "b", 2], rivalSkill: NaN })] } });
+  assert.equal(mixed.playLog.waves.length, 2);
+  assert.equal(mixed.playLog.waves[0].score, 0);
+  assert.deepEqual(mixed.playLog.waves[0].parts, { speed: 1.23 });
+  assert.equal(mixed.playLog.waves[0].season, null);
+  assert.deepEqual(mixed.playLog.heats[0].playerWaves, [1, 2]);
+  assert.equal(mixed.playLog.heats[0].rivalSkill, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(mixed)), mixed, "what survives is plain JSON");
+});
+ok("play log: the Shift+L export is plain JSON with the game, version, time, progress and every record, and leaves the save untouched", () => {
+  const s = defaultSave();
+  s.season = 2;
+  s.event = 3;
+  logWave(s, waveRec(1));
+  logHeat(s, heatRec(1));
+  const before = JSON.stringify(s);
+  const out = exportPlayLog(s, 1761000000000);
+  assert.equal(JSON.stringify(s), before);
+  assert.equal(out.game, "endless-swell");
+  assert.equal(out.kind, "play-log");
+  assert.equal(out.version, PLAYLOG_VERSION);
+  assert.equal(out.exportedAt, 1761000000000);
+  assert.equal(out.exportedAtIso, "2025-10-20T22:40:00.000Z");
+  assert.deepEqual(out.progress, { season: 2, event: 3, attempt: 0, points: 0 });
+  assert.deepEqual(out.waves, s.playLog.waves);
+  assert.deepEqual(out.heats, s.playLog.heats);
+  assert.deepEqual(JSON.parse(JSON.stringify(out)), out);
+  for (const key of ["owned", "gear", "loadout"]) assert.equal(key in out, false, `${key} is not part of the log`);
 });
 
 console.log(`save checks passed (${checks} groups)`);

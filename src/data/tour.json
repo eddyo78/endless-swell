@@ -8,6 +8,23 @@
     "waves": 3,
     "aiSkip": 0.1
   },
+  "warmup": {
+    "_about": "Season 1's first events are a warm-up for a new player (Ed, 2026-10-21: Event 1 was too hard to pass). rivalScale[i] multiplies a rival's wave score in Season 1 event i+1; from the first event past the list it is 1, so the rivals meet the ordinary curve at Event 5. Target rival two-wave totals (best two of the rival's waves): Event 1 about 3 (two modest 2.5-point waves beat them nearly every time), then about 4.3, 5.8, 7.5, and Event 5 (about 9.7) is the ordinary curve. Real human pass rates are not measured: the play log (playLog below) is how they will be. forgiveEvents is how many of Season 1's first events forgive a heat's first wipeout: the wave scores what the rider earned before it (the normal parts, no exit bonus, scaled by ride length up to fullRideSeconds, at most cap), and the heat gives a fresh wave (one more wave and extraSeconds more clock).",
+    "season": 1,
+    "rivalScale": [0.4, 0.55, 0.7, 0.85],
+    "forgiveEvents": 3,
+    "forgive": {
+      "cap": 4.5,
+      "fullRideSeconds": 8,
+      "extraSeconds": 12
+    }
+  },
+  "playLog": {
+    "_about": "The play log kept in the save so difficulty can be tuned from real play: the last maxWaves waves and the last maxHeats heats. Nothing is sent anywhere; Shift+L in the game saves the log as a JSON file.",
+    "version": 1,
+    "maxWaves": 500,
+    "maxHeats": 200
+  },
   "curve": {
     "_about": "Per season s, g(s) = 1 - 1/(1 + (s-1)/approachK) runs from 0 toward 1 and never reaches it. A season starts at floor + (startLimit-floor)*g, climbs in a straight line over events 1..9 to peakFirst + (peakLimit-peakFirst)*g, and the Finale (event 10) adds the bump on top of the peak. Skill is the rivals' base skill (0..1); feet is the swell.",
     "approachK": 6,

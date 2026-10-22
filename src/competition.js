@@ -142,6 +142,19 @@ function eventSeed(season, event) {
 }
 
 const HEAT = tourData.heat;
+const WARM = tourData.warmup;
+
+/**
+ * The warm-up dials for an event (tour.json "warmup"): a rival score scale, and the wipeout forgiveness (or null). Both only
+ * apply in WARM.season, and the scale is 1 from the first event past the list, so the ordinary curve takes over at Event 5.
+ */
+export function warmupFor(season, event) {
+  const inWarmup = season === WARM.season;
+  return {
+    rivalScale: inWarmup && event <= WARM.rivalScale.length ? WARM.rivalScale[event - 1] : 1,
+    forgive: inWarmup && event <= WARM.forgiveEvents ? { ...WARM.forgive } : null,
+  };
+}
 
 /**
  * The event for level number n (n >= 1). n maps to a season and an event, and the seed takes the season in, so the same
@@ -162,6 +175,7 @@ export function generateTour(n) {
   const heatSeconds = Math.min(HEAT.seconds, ...defs.map((d) => d.heatSeconds ?? HEAT.seconds));
   const aiSkip = Math.max(HEAT.aiSkip, ...defs.map((d) => d.aiSkip ?? 0));
   const reefLift = Math.max(0, ...defs.map((d) => d.reefLift ?? 0));
+  const warm = warmupFor(season, event);
   const extraReef = Math.max(0, ...defs.map((d) => d.extraReef ?? 0));
 
   // Side-shore wind is only a name when a twist makes it matter, so the random wind never rolls it.
@@ -240,6 +254,8 @@ export function generateTour(n) {
     heatSeconds,
     aiSkip,
     reefLift,
+    rivalScale: warm.rivalScale,
+    forgiveWipe: warm.forgive,
     sharks,
     reef,
     zones,
@@ -254,25 +270,49 @@ export function hasTwist(cond, id) {
   return !!cond && Array.isArray(cond.twists) && cond.twists.includes(id);
 }
 
-export function judgeWave(stats, cond) {
-  if (!stats || !stats.samples) return { total: 0, wipe: !!stats?.wipe, parts: {} };
+/** The five ride-quality parts and the spit bonus, from a ride's stats. Shared by a finished wave and a forgiven wipeout. */
+function rideParts(stats, cond) {
   const avgSpeed = stats.speedSum / stats.samples;
   const avgS = stats.sSum / stats.samples;
   const variance = Math.max(0, stats.speedSq / stats.samples - avgSpeed * avgSpeed);
   const cv = Math.sqrt(variance) / Math.max(avgSpeed, 0.1);
   const flowScore = clamp(1.2 - cv * 2.6, 0, 1);
-  if (stats.wipe) {
-    const partial = clamp(stats.tubeTime * 0.22 + stats.committed * 0.12, 0, 2.2);
-    return { total: Math.round(partial * 10) / 10, wipe: true, parts: { partial } };
-  }
   const tube = clamp(stats.tubeTime * 0.32 + stats.deepTime * 0.26, 0, 3.35);
   const commit = clamp((avgS - 0.16) * 3.1 + ((cond.feet || 8) - 4) / 16 * 0.7 + stats.committed * 0.05, 0, 1.7);
   const speed = clamp((avgSpeed - 6.2) * 0.2 + (stats.maxSpeed - 8) * 0.05, 0, 1.65);
   const flow = clamp(flowScore * 1.15, 0, 1.15);
   const variety = clamp(stats.pumps * 0.16 + stats.turns * 0.11 + Math.min(stats.stalls, 2.2) * 0.14, 0, 1.15);
-  const exit = stats.clean ? 1 : 0.2;
   let spit = stats.spit ? 0.8 : 0;
   if (hasTwist(cond, "spit-double")) spit *= 2;
+  return { tube, commit, speed, flow, variety, spit };
+}
+
+/**
+ * Score a ride 0-10. A wipeout caps the wave at its small partial (tube and committed time). In the warm-up the first wipeout
+ * of a heat is forgiven: pass opts.forgive (cond.forgiveWipe) and the wave scores what was earned before it, the ordinary
+ * parts with no exit bonus, scaled by ride length up to forgive.fullRideSeconds and capped at forgive.cap.
+ */
+export function judgeWave(stats, cond, opts = null) {
+  if (!stats || !stats.samples) return { total: 0, wipe: !!stats?.wipe, parts: {} };
+  if (stats.wipe) {
+    const partial = clamp(stats.tubeTime * 0.22 + stats.committed * 0.12, 0, 2.2);
+    const forgive = opts && opts.forgive;
+    if (forgive) {
+      const p = rideParts(stats, cond);
+      const length = clamp(stats.samples / 60 / forgive.fullRideSeconds, 0, 1);
+      const earned = clamp((p.tube + p.commit + p.speed + p.flow + p.variety + p.spit) * length, 0, forgive.cap);
+      const total = Math.max(earned, partial);
+      return {
+        total: Math.round(total * 10) / 10,
+        wipe: true,
+        forgiven: true,
+        parts: { tube: round(p.tube), commit: round(p.commit), speed: round(p.speed), flow: round(p.flow), variety: round(p.variety), spit: round(p.spit), exit: 0, lengthScale: round(length), partial: round(partial) },
+      };
+    }
+    return { total: Math.round(partial * 10) / 10, wipe: true, parts: { partial } };
+  }
+  const { tube, commit, speed, flow, variety, spit } = rideParts(stats, cond);
+  const exit = stats.clean ? 1 : 0.2;
   const total = clamp(tube + commit + speed + flow + variety + exit + spit, 0, 10);
   return {
     total: Math.round(total * 10) / 10,
@@ -297,6 +337,7 @@ export function rivalWave(skill, cond, rand) {
   let s = 2.6 + skill * 6.1 + ((cond.feet || 8) - 4) / 22 + (rand() - 0.5) * (2.1 - skill);
   const wiped = rand() < 0.05 + (1 - skill) * 0.16;
   if (wiped) s = 0.4 + rand() * 1.6;
+  else s *= cond.rivalScale ?? 1; // the warm-up scale (tour.json "warmup"); 1 outside Season 1's first events
   if (cond.look === "storm") s -= 0.35;
   if (cond.look === "night") s -= 0.15;
   return { total: Math.round(clamp(s, 0.1, 10) * 10) / 10, wipe: wiped, interference: false };

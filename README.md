@@ -14,6 +14,7 @@ A browser surfing game. One heavy reef break, an endless tour, and a surfer you 
 | Down arrow / S / drag down | Stall |
 | R | Restart the wave |
 | Enter | Start from the menu or the heat brief |
+| Shift+L | Save your play log (waves and heats, kept in this browser only) as a JSON file |
 
 The camera sits just behind the board, wide and slightly fisheye, and it stays on the air side of the water. Steering into the wall will not punch the view through the wave.
 

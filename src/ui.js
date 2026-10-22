@@ -106,7 +106,7 @@ export function lockerShellHTML() {
   return `<div class="panel lk">
     <div class="lk-stage" id="lk-view" aria-label="Surfer preview. Drag to turn."><div class="lk-badge" id="lk-badge"></div><div class="lk-hint"><span class="when-ready">Drag to turn</span><span class="when-wait">Setting up the studio…</span></div></div>
     <div class="lk-side">
-      <div class="lk-head"><h1>LOCKER</h1><p class="sub">EARNED GEAR · PREMIUM STAYS LOCKED</p><p class="fine" id="lk-fine"></p></div>
+      <div class="lk-head"><h1>LOCKER</h1><p class="sub">EARNED GEAR · PREMIUM STAYS LOCKED</p><p class="fine" id="lk-fine"></p><div class="lk-skin"><span class="label">Skin</span><div class="swatches" id="lk-skin"></div></div></div>
       <div class="lk-scroll" id="lk-list"></div>
       <div class="lk-foot"><p class="fine">Premium prices are placeholders. Nothing is charged.</p><button class="big" id="locker-back" type="button">Back</button></div>
     </div>
@@ -123,6 +123,14 @@ export function itemFlag(item, owned) {
   if (item.generated) return `Earned · ${item.reward}`;
   if (owned) return "Owned";
   return item.reward ? `Locked · ${item.reward}` : "Locked";
+}
+
+/** The six skin-tone swatches of the Locker (the same tones and the same loadout field as the menu's picker). */
+export function lockerSkinHTML(save) {
+  return catalog.skinTones.map((t) => {
+    const on = t.color.toLowerCase() === save.loadout.skin.toLowerCase() ? " on" : "";
+    return `<button type="button" class="swatch${on}" data-skin="${t.color}" style="background:${t.color}" title="${t.name}" aria-label="Skin ${t.name}"></button>`;
+  }).join("");
 }
 
 /** The Locker's fine-print line: gear count and the pity counter. */

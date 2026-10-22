@@ -92,6 +92,135 @@ export function defaultSave() {
     },
     quality: "high",
     best: 0,
+    playLog: emptyPlayLog(),
+  };
+}
+
+// ---- the play log --------------------------------------------------------------------------------------------------
+// What the player really did, kept in the save (never sent anywhere) so the difficulty can be tuned from real play: one
+// record per wave ridden and one per heat. Capped to the last maxWaves waves and maxHeats heats (tour.json "playLog").
+// Shift+L in the game exports it (src/playlog.js).
+const PLAYLOG = tuning.playLog;
+export const PLAYLOG_VERSION = PLAYLOG.version;
+export const PLAYLOG_MAX_WAVES = PLAYLOG.maxWaves;
+export const PLAYLOG_MAX_HEATS = PLAYLOG.maxHeats;
+
+export function emptyPlayLog() {
+  return { v: PLAYLOG_VERSION, waves: [], heats: [] };
+}
+
+function num(v, digits = 2) {
+  return Number.isFinite(v) ? Math.round(v * 10 ** digits) / 10 ** digits : 0;
+}
+
+function numOrNull(v) {
+  return Number.isFinite(v) ? v : null;
+}
+
+function strOrNull(v) {
+  return typeof v === "string" ? v : null;
+}
+
+/** The parts of one wave score as numbers only (a wipe has just {partial}; a forgiven wipe and a ridden wave have more). */
+function cleanParts(parts) {
+  const out = {};
+  if (parts && typeof parts === "object") for (const [k, v] of Object.entries(parts)) if (Number.isFinite(v)) out[k] = num(v);
+  return out;
+}
+
+/** One wave record in its saved shape; sanitize() runs every stored record through this too, so a record can never be malformed. */
+function cleanWave(w) {
+  return {
+    at: Number.isFinite(w.at) ? w.at : 0,
+    season: numOrNull(w.season),
+    event: numOrNull(w.event),
+    attempt: numOrNull(w.attempt),
+    round: strOrNull(w.round),
+    wave: numOrNull(w.wave),
+    score: num(w.score, 1),
+    parts: cleanParts(w.parts),
+    rideSeconds: num(w.rideSeconds, 1),
+    tubeSeconds: num(w.tubeSeconds, 1),
+    wipe: !!w.wipe,
+    cause: strOrNull(w.cause),
+    forgiven: !!w.forgiven,
+    interference: !!w.interference,
+    clean: !!w.clean,
+    spit: !!w.spit,
+  };
+}
+
+function cleanScores(list) {
+  return (Array.isArray(list) ? list : []).filter((x) => Number.isFinite(x)).map((x) => num(x, 1));
+}
+
+function cleanHeat(h) {
+  return {
+    at: Number.isFinite(h.at) ? h.at : 0,
+    season: numOrNull(h.season),
+    event: numOrNull(h.event),
+    attempt: numOrNull(h.attempt),
+    round: strOrNull(h.round),
+    rival: strOrNull(h.rival),
+    rivalSkill: num(h.rivalSkill, 3),
+    playerTotal: num(h.playerTotal, 1),
+    rivalTotal: num(h.rivalTotal, 1),
+    playerWaves: cleanScores(h.playerWaves),
+    rivalWaves: cleanScores(h.rivalWaves),
+    won: !!h.won,
+    place: numOrNull(h.place),
+    eventPlace: numOrNull(h.eventPlace),
+  };
+}
+
+function sanitizePlayLog(raw) {
+  const log = emptyPlayLog();
+  if (!raw || typeof raw !== "object" || raw.v !== PLAYLOG_VERSION) return log;
+  const records = (list) => (Array.isArray(list) ? list.filter((r) => r && typeof r === "object") : []);
+  log.waves = records(raw.waves).slice(-PLAYLOG_MAX_WAVES).map(cleanWave);
+  log.heats = records(raw.heats).slice(-PLAYLOG_MAX_HEATS).map(cleanHeat);
+  return log;
+}
+
+/** Append one wave record (see cleanWave for the fields) and trim to the cap. Returns the stored record. */
+export function logWave(save, wave) {
+  if (!save.playLog) save.playLog = emptyPlayLog();
+  const rec = cleanWave(wave);
+  save.playLog.waves.push(rec);
+  if (save.playLog.waves.length > PLAYLOG_MAX_WAVES) save.playLog.waves.splice(0, save.playLog.waves.length - PLAYLOG_MAX_WAVES);
+  return rec;
+}
+
+/** Append one heat record (see cleanHeat for the fields) and trim to the cap. Returns the stored record. */
+export function logHeat(save, heat) {
+  if (!save.playLog) save.playLog = emptyPlayLog();
+  const rec = cleanHeat(heat);
+  save.playLog.heats.push(rec);
+  if (save.playLog.heats.length > PLAYLOG_MAX_HEATS) save.playLog.heats.splice(0, save.playLog.heats.length - PLAYLOG_MAX_HEATS);
+  return rec;
+}
+
+/** When an event is settled, stamp its final placement on the last heat logged for that event. Returns the heat or null. */
+export function logEventPlace(save, place) {
+  const heats = save.playLog?.heats;
+  if (!heats || !heats.length) return null;
+  const last = heats[heats.length - 1];
+  last.eventPlace = place;
+  return last;
+}
+
+/** The log as the plain object Shift+L writes to a file: the save's place in the tour, the wave and heat records. */
+export function exportPlayLog(save, now = Date.now()) {
+  const log = save.playLog || emptyPlayLog();
+  return {
+    game: "endless-swell",
+    kind: "play-log",
+    version: PLAYLOG_VERSION,
+    exportedAt: now,
+    exportedAtIso: new Date(now).toISOString(),
+    progress: { season: save.season, event: save.event, attempt: save.attempt, points: save.points },
+    waves: log.waves,
+    heats: log.heats,
   };
 }
 
@@ -262,6 +391,7 @@ function sanitize(data) {
     owned: [...owned],
     quality: data.quality === "low" ? "low" : "high",
     best: Number.isFinite(data.best) ? data.best : 0,
+    playLog: sanitizePlayLog(data.playLog),
     loadout: {
       body,
       skin: typeof load.skin === "string" ? load.skin : base.loadout.skin,

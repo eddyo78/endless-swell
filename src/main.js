@@ -1,5 +1,5 @@
 import { createWorld } from "./scene.js";
-import { createRide, resetRide, updateRide, syncWorld, autopilot, cameraAirGap, stressCamera } from "./ride.js";
+import { createRide, resetRide, updateRide, syncWorld, autopilot, poorAutopilot, cameraAirGap, stressCamera } from "./ride.js";
 import {
   advanceBracket,
   bestTwo,
@@ -13,7 +13,8 @@ import {
   recordHeat,
   rivalWave,
 } from "./competition.js";
-import { catalog, equipItem, grantReward, isBody, itemMap, loadSave, registerGear, settleFinish, switchBody, writeSave } from "./save.js";
+import { catalog, equipItem, grantReward, isBody, itemMap, loadSave, logEventPlace, logHeat, logWave, registerGear, settleFinish, switchBody, writeSave } from "./save.js";
+import { exportLog } from "./playlog.js";
 import { eventNumber } from "./season.js";
 import * as printArt from "./printart.js";
 import { CLOTH_CEILING } from "./printmat.js";
@@ -58,6 +59,7 @@ const app = {
   bracket: null,
   heat: null,
   auto: false,
+  autoStyle: "good",
   forced: null,
   pause: false,
   saveOk: true,
@@ -164,6 +166,10 @@ function openLocker() {
       persist();
       return true;
     },
+    skin: (color) => {
+      save.loadout.skin = color;
+      persist();
+    },
     back: () => enterMenu(),
   });
 }
@@ -209,6 +215,10 @@ function beginHeat() {
     clock: 0,
     max: app.tour.heatSeconds,
     limit: app.tour.waveCap,
+    // the rival's wave count stays at the event's cap; limit is the player's and grows by one when a warm-up wipeout is forgiven
+    rivalLimit: app.tour.waveCap,
+    baseLimit: app.tour.waveCap,
+    forgiven: false,
     playerWaves: [],
     rivalWaves: [],
     priority: app.tour.n < 3 || rand() < 0.55 ? "player" : "rival",
@@ -294,7 +304,7 @@ function currentInput() {
       const drop = heat.priority === "player" || age > 5.2;
       return { steer: 0, thr: drop ? 1 : 0 };
     }
-    if (app.mode === "ride" && ride.mode === "ride") return autopilot(ride, app.cond);
+    if (app.mode === "ride" && ride.mode === "ride") return app.autoStyle === "poor" && app.heat ? poorAutopilot(ride, app.cond, app.heat.playerWaves.length) : autopilot(ride, app.cond);
   }
   if (app.mode === "ride" || app.mode === "paddle") return readHuman();
   return { steer: 0, thr: 0 };
@@ -306,10 +316,10 @@ function heatClock(dt) {
   heat.clock += dt;
   const start = heat.windows[heat.window] ?? heat.max;
   const age = heat.clock - start;
-  if (!heat.taken && heat.rivalWaves.length < heat.limit && age > 1.25 && heat.priority === "rival") {
+  if (!heat.taken && heat.rivalWaves.length < heat.rivalLimit && age > 1.25 && heat.priority === "rival") {
     takeRival(false);
   }
-  if (!heat.taken && app.mode === "paddle" && age > 6.5 && heat.rivalWaves.length < heat.limit) {
+  if (!heat.taken && app.mode === "paddle" && age > 6.5 && heat.rivalWaves.length < heat.rivalLimit) {
     takeRival(true);
   }
   if (app.mode !== "ride" && heat.window < heat.windows.length - 1 && heat.clock > heat.windows[heat.window + 1] - 0.05) {
@@ -333,9 +343,40 @@ function takeRival(declined) {
   heat.rivalHoldUntil = heat.clock + 8;
 }
 
+// The forgiveness that applies to the wave on the water: the warm-up forgives the first wipeout of a heat (tour.json "warmup").
+function forgiveNow() {
+  const heat = app.heat;
+  return heat && !heat.forgiven && app.tour && app.tour.forgiveWipe ? app.tour.forgiveWipe : null;
+}
+
+// One wave of play into the play log (kept in the save, exported with Shift+L). `judged` is the wave as scored.
+function recordWave(judged, roundName, waveNumber) {
+  const stats = ride.stats;
+  logWave(save, {
+    at: Date.now(),
+    season: app.tour ? app.tour.season : null,
+    event: app.tour ? app.tour.event : null,
+    attempt: app.tour ? save.attempt : null,
+    round: roundName,
+    wave: waveNumber,
+    score: judged.total,
+    parts: judged.parts,
+    rideSeconds: stats.samples / 60,
+    tubeSeconds: stats.tubeTime,
+    wipe: !!stats.wipe,
+    cause: stats.wipe ? ride.wipeMsg || null : null,
+    forgiven: !!judged.forgiven,
+    interference: !!judged.interference,
+    clean: !!stats.clean,
+    spit: !!stats.spit,
+  });
+  persist();
+}
+
 function onWaveEnded() {
   if (!app.heat) {
     const judged = judgeWave(ride.stats, app.cond);
+    recordWave(judged, "Free surf", null);
     if (judged.total > save.best) {
       save.best = judged.total;
       persist();
@@ -346,12 +387,20 @@ function onWaveEnded() {
     return;
   }
   const heat = app.heat;
-  let judged = judgeWave(ride.stats, app.tour);
+  const forgive = forgiveNow();
+  let judged = judgeWave(ride.stats, app.tour, { forgive });
+  if (judged.forgiven) {
+    // warm-up: the wipeout scored what it earned, and the heat gives a fresh wave (one more wave, and the time to ride it)
+    heat.forgiven = true;
+    heat.limit += 1;
+    heat.max += forgive.extraSeconds;
+  }
   if (heat.pendingInterference) {
     heat.interference += 1;
     const zero = hasTwist(app.tour, "priority-strict") || heat.interference >= 2;
     judged = { ...judged, total: zero ? 0 : Math.round(judged.total * 0.5 * 10) / 10, interference: true };
   } else if (heat.swapAfter) heat.priority = "rival";
+  recordWave(judged, app.bracket.rounds[app.bracket.roundIndex].name, heat.playerWaves.length + 1);
   heat.playerWaves.push(judged);
   heat.playerRiding = false;
   heat.pendingInterference = false;
@@ -362,7 +411,7 @@ function onWaveEnded() {
   }
   app.mode = "gap";
   app.gap = 1.3;
-  ride.msg = judged.interference ? `Interference ${judged.total.toFixed(1)}` : judged.total.toFixed(1);
+  ride.msg = judged.interference ? `Interference ${judged.total.toFixed(1)}` : judged.forgiven ? `${judged.total.toFixed(1)} · fresh wave` : judged.total.toFixed(1);
   ride.msgT = 1.3;
 }
 
@@ -388,6 +437,21 @@ function endHeat() {
     // what leaving the screen now keeps: winning the quarterfinal is a sure top 4, winning the semifinal a sure runner-up
     bank: won ? BANKED[round.name] || null : null,
   };
+  logHeat(save, {
+    at: Date.now(),
+    season: app.tour.season,
+    event: app.tour.event,
+    attempt: save.attempt,
+    round: round.name,
+    rival: heat.rival.name,
+    rivalSkill: heat.rival.skill,
+    playerTotal,
+    rivalTotal,
+    playerWaves: heat.playerWaves.map((w) => w.total),
+    rivalWaves: heat.rivalWaves.map((w) => w.total),
+    won,
+    place,
+  });
   const movingOn = won && round.name !== "Final";
   if (!movingOn) conclude(place);
   app.mode = "result";
@@ -420,6 +484,7 @@ function continueTour() {
 
 function conclude(place) {
   if (app.bracket.settled) throw new Error("conclude: this event was already settled");
+  logEventPlace(save, place);
   const settled = settleFinish(save, place);
   app.bracket.settled = true;
   syncItems();
@@ -473,12 +538,12 @@ function paintHud() {
   ui.tube.textContent = ride.tube.toFixed(1) + "s";
   ui.speed.textContent = ride.speed.toFixed(1);
   if (app.heat) {
-    ui.score.textContent = ride.stats && ride.mode !== "menu" ? (judgeWave(ride.stats, app.cond).total || 0).toFixed(1) : "–";
+    ui.score.textContent = ride.stats && ride.mode !== "menu" ? (judgeWave(ride.stats, app.cond, { forgive: forgiveNow() }).total || 0).toFixed(1) : "–";
     ui.heatScore.textContent = `${bestTwo(app.heat.playerWaves).toFixed(1)}–${bestTwo(app.heat.rivalWaves).toFixed(1)}`;
     ui.heatReadout.style.display = "";
     const left = Math.max(0, app.heat.max - app.heat.clock);
     ui.priority.style.display = "";
-    ui.priority.textContent = `Priority ${app.heat.priority === "player" ? "you" : app.heat.rival.name.split(" ")[0]} · ${left.toFixed(0)}s · wave ${Math.min(app.heat.limit, app.heat.playerWaves.length + (app.mode === "ride" ? 1 : 0))}/${app.heat.limit}`;
+    ui.priority.textContent = `Priority ${app.heat.priority === "player" ? "you" : app.heat.rival.name.split(" ")[0]} · ${left.toFixed(0)}s · wave ${Math.min(app.heat.baseLimit, app.heat.playerWaves.filter((w) => !w.forgiven).length + (app.mode === "ride" ? 1 : 0))}/${app.heat.baseLimit}`;
   } else {
     ui.score.textContent = Math.round(ride.score);
     ui.heatReadout.style.display = "none";
@@ -532,6 +597,8 @@ addEventListener("keydown", (e) => {
   app.keys[e.code] = true;
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
   if (e.code === "KeyR") restart();
+  // Shift+L: save the play log (src/playlog.js); the key is ignored while typing in a field
+  if (e.code === "KeyL" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || "")) exportLog(save);
   if ((e.code === "Enter" || e.code === "Space") && app.mode === "menu" && !lockerView) startFree();
   if ((e.code === "Enter" || e.code === "Space") && app.mode === "brief") beginHeat();
   if ((e.code === "Enter" || e.code === "Space") && app.mode === "paddle") dropIn();
@@ -563,7 +630,8 @@ window.__surf = {
   ready: false,
   get pause() { return app.pause; },
   set pause(v) { app.pause = v; },
-  setAutopilot(v) { app.auto = !!v; if (v) app.forced = null; },
+  // style "poor" (scripts/check-flow.mjs): the rider of ride.js poorAutopilot(), who wipes out on the first wave of a heat
+  setAutopilot(v, style = "good") { app.auto = !!v; app.autoStyle = style; if (v) app.forced = null; },
   setInput(steer, thr) { app.auto = false; app.forced = { steer, thr }; },
   setBody(id) {
     if (!isBody(id)) return;
@@ -778,6 +846,8 @@ window.__surf = {
   tour: () => (app.tour ? app.tour.n : eventNumber(save.season, save.event)),
   event: () => ({ season: save.season, event: save.event, attempt: save.attempt }),
   save: () => save,
+  // Test hook: the Shift+L export, as the object it would write (scripts/check-flow.mjs)
+  exportLog: () => exportLog(save, { dryRun: true }),
   heat: () => app.heat && {
     max: app.heat.max,
     limit: app.heat.limit,
