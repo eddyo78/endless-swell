@@ -1,13 +1,15 @@
 import { createWorld } from "./scene.js";
-import { createRide, resetRide, updateRide, syncWorld, autopilot, poorAutopilot, cameraAirGap, stressCamera } from "./ride.js";
+import { HERO, createRide, resetRide, updateRide, syncWorld, autopilot, poorAutopilot, cameraAirGap, stressCamera } from "./ride.js";
 import {
   advanceBracket,
   bestTwo,
+  comboStep,
   createBracket,
   generateTour,
   hasTwist,
   judgeWave,
   mulberry32,
+  newCombo,
   placeFromRound,
   playerHeat,
   recordHeat,
@@ -16,17 +18,19 @@ import {
 import { catalog, equipItem, grantReward, isBody, itemMap, loadSave, logEventPlace, logHeat, logWave, registerGear, settleFinish, switchBody, writeSave } from "./save.js";
 import { exportLog } from "./playlog.js";
 import { mountCues } from "./cues.js";
-import { eventNumber } from "./season.js";
+import { mountHud } from "./hud.js";
+import { eventLabel, eventNumber } from "./season.js";
 import * as printArt from "./printart.js";
 import { CLOTH_CEILING } from "./printmat.js";
 import { BOARD_SHAPES, createBoardParts } from "./board.js";
-import { bindPanel, briefHTML, freeEndHTML, heatResultHTML, helpHTML, menuHTML, mountUI, tourEndHTML } from "./ui.js";
+import { bindPanel, briefHTML, freeEndHTML, heatResultHTML, helpHTML, menuHTML, mountUI, pauseHTML, settingsHTML, tourEndHTML } from "./ui.js";
 import { openLockerView, thumbCacheBytes, thumbCacheSize, thumbStats } from "./locker.js";
 
 const canvas = document.getElementById("c");
 const world = await createWorld(canvas);
 const ride = createRide();
 const ui = mountUI();
+const hud = mountHud(ui.root);
 const cues = mountCues();
 const save = loadSave();
 // Every wearable item by id: the catalog plus the gear this save has won. Refreshed whenever gear is granted.
@@ -67,8 +71,8 @@ const app = {
   saveOk: true,
   last: performance.now(),
   acc: 0,
-  frames: 0,
-  fpsT: 0,
+  hold: false, // the player's Pause (the tests' own freeze is `pause`)
+  combo: newCombo(),
   input: { steer: 0, thr: 0 },
   keys: {},
   pointer: { id: null, x0: 0, y0: 0, dx: 0, dy: 0 },
@@ -79,6 +83,13 @@ const app = {
 world.setQuality(save.quality);
 applyLookout();
 enterMenu();
+
+// Every new stretch of water starts the HUD's popups and the combo chain over.
+function restartRide(cond, opts) {
+  resetRide(ride, cond, opts);
+  hud.reset();
+  app.combo = newCombo();
+}
 
 function persist() {
   app.saveOk = writeSave(save);
@@ -106,6 +117,7 @@ function renderFrame() {
 
 function show(html) {
   closeLocker();
+  closePause();
   ui.panels.innerHTML = html || "";
   ui.panels.style.display = html ? "block" : "none";
   // CSS hooks: a screen is up (the Restart button hides) or the ride is on
@@ -117,30 +129,20 @@ function show(html) {
     locker: () => openLocker(),
     help: () => show(helpHTML()),
     helpBack: () => show(menuHTML(save)),
+    settings: () => show(settingsHTML(save)),
+    settingsBack: () => show(menuHTML(save)),
+    quality: (value) => {
+      save.quality = value === "low" ? "low" : "high";
+      world.setQuality(save.quality);
+      persist();
+      show(settingsHTML(save));
+    },
     menu: () => enterMenu(),
-    skin: (color) => {
-      save.loadout.skin = color;
-      persist();
-      world.surfer.apply(save.loadout, byId);
-      openLockerOrMenu();
-    },
-    body: (id) => {
-      if (!isBody(id)) return;
-      switchBody(save, id);
-      persist();
-      world.surfer.apply(save.loadout, byId);
-      enterMenu();
-    },
     begin: () => beginHeat(),
     next: () => continueTour(),
     done: () => showTourEnd(),
     heatMenu: () => leaveResult(),
   });
-}
-
-function openLockerOrMenu() {
-  if (lockerView) lockerView.rebuild();
-  else if (ui.panels.querySelector("#open-locker")) enterMenu();
 }
 
 function enterMenu() {
@@ -150,12 +152,11 @@ function enterMenu() {
   app.bracket = null;
   app.cond = showcase;
   world.applyLook("day");
-  resetRide(ride, showcase, { mode: "menu", dLock: -6.5, s: 0.52, z: -6.5 });
+  restartRide(showcase, { mode: "menu", hero: true, dLock: -6.5, s: 0.52, z: -6.5 });
   world.spray.clear();
   world.wake.clear();
   show(menuHTML(save));
   ui.hud.style.display = "none";
-  ui.priority.style.display = "none";
 }
 
 function openLocker() {
@@ -187,7 +188,7 @@ function openBrief() {
   app.bracket = createBracket(app.tour, save.attempt);
   world.applyLook(app.tour.look);
   app.mode = "brief";
-  resetRide(ride, app.tour, { mode: "menu", dLock: -8, s: 0.48, z: -8 });
+  restartRide(app.tour, { mode: "menu", dLock: -8, s: 0.48, z: -8 });
   show(briefHTML(app.tour, save.attempt));
   ui.hud.style.display = "none";
 }
@@ -199,13 +200,11 @@ function startFree(cond = null) {
   app.cond = cond || { ...showcase, sharks: [], reef: [], zones: [], boards: [] };
   world.applyLook(app.cond.look || "day");
   app.mode = "ride";
-  resetRide(ride, app.cond, { mode: "ride", fade: !cond, maxRide: 30, z: -18, msg: "Paddle in" });
+  restartRide(app.cond, { mode: "ride", fade: !cond, maxRide: 30, z: -18, msg: "Paddle in" });
   world.spray.clear();
   world.wake.clear();
   show("");
   ui.hud.style.display = "";
-  ui.priority.style.display = "none";
-  ui.scoreLabel.textContent = "SCORE";
 }
 
 function beginHeat() {
@@ -240,13 +239,11 @@ function beginHeat() {
   app.cond = app.tour;
   world.applyLook(app.tour.look);
   app.mode = "paddle";
-  resetRide(ride, app.tour, { mode: "menu", dLock: -14, s: 0.4, z: -14 });
+  restartRide(app.tour, { mode: "menu", dLock: -14, s: 0.4, z: -14 });
   world.spray.clear();
   world.wake.clear();
   show("");
   ui.hud.style.display = "";
-  ui.priority.style.display = "";
-  ui.scoreLabel.textContent = "WAVE";
   ride.msg = "Drop in";
   ride.msgT = 2;
 }
@@ -274,7 +271,7 @@ function dropIn() {
     }
   }
   app.mode = "ride";
-  resetRide(ride, app.cond, {
+  restartRide(app.cond, {
     mode: "ride",
     fade: !app.heat,
     maxRide: app.heat ? 16 : 28,
@@ -469,7 +466,6 @@ function endHeat() {
   if (!movingOn) conclude(place);
   app.mode = "result";
   show(heatResultHTML(app.resultView));
-  ui.priority.style.display = "none";
 }
 
 const BANKED = { Quarterfinal: 4, Semifinal: 2 };
@@ -530,7 +526,7 @@ function tick(dt) {
     updateRide(ride, dt, { steer: 0, thr: 0 }, app.cond);
     if (app.gap <= 0) {
       app.mode = "paddle";
-      resetRide(ride, app.cond, { mode: "menu", dLock: -12, s: 0.4, z: ride.z });
+      restartRide(app.cond, { mode: "menu", dLock: -12, s: 0.4, z: ride.z });
       ride.msg = "Next wave";
       ride.msgT = 1.2;
     }
@@ -544,25 +540,73 @@ function tick(dt) {
   paintHud();
 }
 
+// The ride's rounds as the HUD's ladder, and the colours of the heat's score chips (you: gold, the rival: lagoon)
+const ROUND_LADDER = ["Round of 16", "Quarterfinal", "Semifinal", "Final"];
+const CHIP = { you: "#FFC21A", rival: "#11B5A4", best: "#E8407F" };
+// the ride's own words that the HUD draws as popups instead of the plain message line
+const POPUP_WORDS = new Set(["WIPEOUT", "CLEAN EXIT", "KICK OUT", "SPIT"]);
+const frameEvents = [];
+
+function mmss(sec) {
+  const total = Math.max(0, Math.ceil(sec));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 function paintHud() {
-  const showHud = app.mode === "ride" || app.mode === "paddle" || app.mode === "gap";
-  ui.hud.style.visibility = showHud ? "visible" : "hidden";
-  document.getElementById("pocket").style.visibility = showHud ? "visible" : "hidden";
-  ui.tube.textContent = ride.tube.toFixed(1) + "s";
-  ui.speed.textContent = ride.speed.toFixed(1);
-  if (app.heat) {
-    ui.score.textContent = ride.stats && ride.mode !== "menu" ? (judgeWave(ride.stats, app.cond, { forgive: forgiveNow() }).total || 0).toFixed(1) : "–";
-    ui.heatScore.textContent = `${bestTwo(app.heat.playerWaves).toFixed(1)}–${bestTwo(app.heat.rivalWaves).toFixed(1)}`;
-    ui.heatReadout.style.display = "";
-    const left = Math.max(0, app.heat.max - app.heat.clock);
-    ui.priority.style.display = "";
-    ui.priority.textContent = `Priority ${app.heat.priority === "player" ? "you" : app.heat.rival.name.split(" ")[0]} · ${left.toFixed(0)}s · wave ${Math.min(app.heat.baseLimit, app.heat.playerWaves.filter((w) => !w.forgiven).length + (app.mode === "ride" ? 1 : 0))}/${app.heat.baseLimit}`;
+  const live = app.mode === "ride" || app.mode === "paddle" || app.mode === "gap";
+  ui.hud.style.visibility = live ? "visible" : "hidden";
+  ui.pocket.style.visibility = live ? "visible" : "hidden";
+  // the ride's events of this tick: the combo reads them and the HUD turns them into popups
+  frameEvents.length = 0;
+  for (const e of ride.events) frameEvents.push(e);
+  ride.events.length = 0;
+  comboStep(app.combo, frameEvents, ride.t);
+
+  const heat = app.heat;
+  const riding = app.mode === "ride";
+  const judged = ride.mode !== "menu" && ride.stats && ride.stats.samples ? judgeWave(ride.stats, app.cond, { forgive: forgiveNow() }) : null;
+  const frame = {
+    dt: 1 / 60,
+    t: ride.t,
+    points: !heat,
+    decimals: 1,
+    combo: app.combo,
+    events: frameEvents,
+    tube: { total: ride.tube, run: ride.tubeRun, inTube: ride.inTube, spit: ride.spitDone },
+  };
+  if (heat) {
+    const waves = heat.playerWaves.slice();
+    if (riding && judged) waves.push({ total: judged.total });
+    const you = bestTwo(waves);
+    const rival = bestTwo(heat.rivalWaves);
+    const left = Math.max(0, heat.max - heat.clock);
+    const rivalName = heat.rival.name.split(" ")[0];
+    // the wave on the water, or the one about to be paddled for
+    const wave = Math.min(heat.baseLimit, heat.playerWaves.filter((w) => !w.forgiven).length + 1);
+    const round = app.bracket.rounds[app.bracket.roundIndex].name;
+    frame.label = "Heat score";
+    frame.score = you;
+    frame.wave = riding && judged ? `This wave ${judged.total.toFixed(1)}` : `Wave ${wave} of ${heat.baseLimit}`;
+    frame.clock = { text: mmss(left), standing: you > rival ? "1st" : you < rival ? "2nd" : "Even", caption: round, round: ROUND_LADDER.indexOf(round), rounds: ROUND_LADDER };
+    frame.board = [
+      { name: "You", value: you.toFixed(1), you: true, color: CHIP.you },
+      { name: rivalName, value: rival.toFixed(1), you: false, color: CHIP.rival },
+    ].sort((p, q) => Number(q.value) - Number(p.value));
+    frame.strip = `${eventLabel(app.tour.season, app.tour.event)}\nWave ${wave}/${heat.baseLimit} · priority ${heat.priority === "player" ? "you" : rivalName}`;
   } else {
-    ui.score.textContent = Math.round(ride.score);
-    ui.heatReadout.style.display = "none";
-    ui.priority.style.display = "none";
+    frame.label = "Score";
+    frame.score = ride.score;
+    frame.wave = judged ? `Judges ${judged.total.toFixed(1)} / 10` : "";
+    frame.clock = { text: mmss(riding ? ride.t : 0), standing: "", caption: "Free surf", round: 0, rounds: [] };
+    frame.board = [
+      { name: "You", value: judged ? judged.total.toFixed(1) : "0.0", you: true, color: CHIP.you },
+      { name: "Best", value: save.best.toFixed(1), you: false, color: CHIP.best },
+    ];
+    frame.strip = "";
   }
-  ui.msg.textContent = ride.msgT > 0 ? ride.msg : "";
+  hud.update(frame);
+
+  ui.msg.textContent = ride.msgT > 0 && !POPUP_WORDS.has(ride.msg) ? ride.msg : "";
   ui.msg.style.opacity = ride.msgT > 0 ? Math.min(1, ride.msgT * 2) : 0;
   const t = Math.max(0, Math.min(1, -ride.d / 28));
   ui.depth.style.left = (t * 100).toFixed(1) + "%";
@@ -574,7 +618,7 @@ function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(0.1, (now - app.last) / 1000);
   app.last = now;
-  if (!app.pause) {
+  if (!app.pause && !app.hold) {
     app.acc += dt;
     const step = 1 / 60;
     while (app.acc >= step) {
@@ -583,25 +627,36 @@ function loop(now) {
     }
   }
   renderFrame();
-  app.frames += 1;
-  app.fpsT += dt;
-  if (app.fpsT > 0.5) {
-    ui.fps.textContent = Math.round(app.frames / app.fpsT) + " fps";
-    app.frames = 0;
-    app.fpsT = 0;
-  }
 }
 
-ui.qbtn.addEventListener("click", () => {
-  save.quality = save.quality === "high" ? "low" : "high";
-  world.setQuality(save.quality);
-  ui.qbtn.textContent = "Quality: " + save.quality.toUpperCase();
-  persist();
-});
-ui.qbtn.textContent = "Quality: " + save.quality.toUpperCase();
-ui.rbtn.addEventListener("click", () => restart());
+// ---- pause: the button at the bottom right of the ride, and Esc ------------------------------------------------------------
+function rideIsLive() {
+  return app.mode === "ride" || app.mode === "paddle" || app.mode === "gap";
+}
+
+function openPause() {
+  if (app.hold || !rideIsLive() || lockerView) return;
+  app.hold = true;
+  ui.pausePanel.innerHTML = pauseHTML();
+  ui.pausePanel.hidden = false;
+  ui.pausePanel.querySelector("#pause-resume").addEventListener("click", closePause);
+  ui.pausePanel.querySelector("#pause-restart").addEventListener("click", () => restart());
+  ui.pausePanel.querySelector("#pause-menu").addEventListener("click", () => enterMenu());
+  ui.pausePanel.querySelector("#pause-resume").focus();
+}
+
+function closePause() {
+  if (!app.hold && ui.pausePanel.hidden) return;
+  app.hold = false;
+  app.last = performance.now();
+  ui.pausePanel.hidden = true;
+  ui.pausePanel.innerHTML = "";
+}
+
+ui.pauseBtn.addEventListener("click", () => openPause());
 
 function restart() {
+  closePause();
   if (app.mode === "freeend") startFree();
   else if (app.mode === "ride" && !app.heat) startFree();
   else if (app.heat && (app.mode === "paddle" || app.mode === "ride" || app.mode === "gap")) beginHeat();
@@ -610,12 +665,18 @@ function restart() {
 addEventListener("keydown", (e) => {
   app.keys[e.code] = true;
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
-  if (e.code === "KeyR") restart();
+  if (e.code === "KeyR" && !e.repeat) restart();
+  if (e.code === "Escape" && !e.repeat) (app.hold ? closePause() : openPause());
   // Shift+L: save the play log (src/playlog.js); the key is ignored while typing in a field
   if (e.code === "KeyL" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || "")) exportLog(save);
-  if ((e.code === "Enter" || e.code === "Space") && app.mode === "menu" && !lockerView) startFree();
+  // Enter is PLAY on the title screen (the next Season and Event); the PLAY button is only there while that screen is up
+  // (one keypress does one thing: the brief that PLAY opens must not also take this same Enter as "paddle out")
+  if (e.code === "Enter" && app.mode === "menu" && !lockerView) {
+    if (!e.repeat && document.activeElement?.tagName !== "BUTTON") ui.panels.querySelector("#play-tour")?.click();
+    return;
+  }
   if ((e.code === "Enter" || e.code === "Space") && app.mode === "brief") beginHeat();
-  if ((e.code === "Enter" || e.code === "Space") && app.mode === "paddle") dropIn();
+  if ((e.code === "Enter" || e.code === "Space") && app.mode === "paddle" && !app.hold) dropIn();
 });
 addEventListener("keyup", (e) => {
   app.keys[e.code] = false;
@@ -857,6 +918,10 @@ window.__surf = {
   stress: () => stressCamera(world.camera.aspect || 0.56),
   sharks: () => world.sharks.children.filter((c) => c.visible).length,
   mode: () => app.mode,
+  // Test hook (tuning shots): the title screen's camera numbers, editable while the page runs
+  heroCamera: () => HERO,
+  // Test hook (scripts/check-flow.mjs, shots): what the HUD is showing: the popups up now and the combo chain
+  hud: () => ({ popups: hud.popups, combo: { ...app.combo }, paused: app.hold }),
   tour: () => (app.tour ? app.tour.n : eventNumber(save.season, save.event)),
   event: () => ({ season: save.season, event: save.event, attempt: save.attempt }),
   save: () => save,

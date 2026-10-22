@@ -267,6 +267,73 @@ export function generateTour(n) {
   };
 }
 
+// ---- the riding combo ----------------------------------------------------------------------------------------------
+// A chain of the ride's real moves (src/ride.js events) for the HUD's combo meter and multiplier. Everything it needs is in
+// tour.json "combo". It is shown, not scored: judgeWave() does not read it.
+const COMBO = tourData.combo;
+
+/** A fresh chain. */
+export function newCombo() {
+  return { points: 0, moves: 0, best: 0, lastT: 0, x: 1, broke: false };
+}
+
+/** The multiplier tier for a chain of this many points. */
+export function comboMultiplier(points) {
+  let x = COMBO.tiers[0].x;
+  for (const tier of COMBO.tiers) if (points >= tier.at) x = tier.x;
+  return x;
+}
+
+/** What one ride event is worth to the chain (0 when it is not a move). */
+export function comboValue(event) {
+  switch (event.type) {
+    case "pump":
+      if (event.q >= COMBO.perfectPumpAt) return COMBO.moves.perfectPump;
+      return event.q >= COMBO.goodPumpAt ? COMBO.moves.pump : 0;
+    case "turn":
+      return COMBO.moves.turn;
+    case "tube":
+      return event.deep ? COMBO.moves.deepTubeSecond : COMBO.moves.tubeSecond;
+    case "spit":
+      return COMBO.moves.spit;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Advance the chain to ride time `t` with the ride events since the last call. Mutates and returns `combo`. `combo.broke` is
+ * true for the step in which a chain was lost (a wipeout, or holdSeconds with no move) so the HUD can say so once.
+ */
+export function comboStep(combo, events, t) {
+  combo.broke = false;
+  for (const event of events) {
+    if (event.type === "wipe") {
+      if (combo.points > 0) combo.broke = true;
+      combo.points = 0;
+      combo.moves = 0;
+      continue;
+    }
+    const value = comboValue(event);
+    if (value > 0) {
+      combo.points = Math.min(COMBO.segments, combo.points + value);
+      combo.moves += 1;
+      combo.lastT = event.t;
+      combo.best = Math.max(combo.best, combo.moves);
+    }
+  }
+  if (combo.points > 0 && t - combo.lastT > COMBO.holdSeconds) {
+    combo.points = 0;
+    combo.moves = 0;
+    combo.broke = true;
+  }
+  combo.x = comboMultiplier(combo.points);
+  return combo;
+}
+
+/** The meter's size and the hold time, for drawing. */
+export const comboLayout = { segments: COMBO.segments, holdSeconds: COMBO.holdSeconds, tiers: COMBO.tiers.map((t) => ({ ...t })) };
+
 export function hasTwist(cond, id) {
   return !!cond && Array.isArray(cond.twists) && cond.twists.includes(id);
 }

@@ -30,6 +30,8 @@ const TRIM_S = 0.5;
 // the pump rhythm: the best interval between pumps and the width of the timing window (in seconds squared, a Gaussian)
 export const PUMP_BEAT = 0.5;
 export const PUMP_WIDTH = 0.03;
+// seconds of tube run, deep in the barrel, that open the spit
+export const SPIT_RUN = 6.2;
 
 export function blankStats() {
   return {
@@ -53,9 +55,22 @@ export function blankStats() {
   };
 }
 
+/**
+ * The ride's real moments, for the HUD's trick popups and combo (src/hud.js). Each is { type, t, ... } with t the ride clock;
+ * the HUD empties the list every tick. Nothing in the rules reads it.
+ *   wipe, clean, kick, spit: the four ways a wave ends or opens
+ *   pump { q }: a pump, q 0..1 how well it hit the beat
+ *   turn: a steering reversal that counts toward variety
+ *   tube { run, deep }: the tube run passed a whole second (run) while in the tube; deep when in the deep part
+ */
+function emit(st, event) {
+  if (st.events.length < 32) st.events.push({ ...event, t: st.t });
+}
+
 export function createRide() {
   return {
     mode: "menu",
+    hero: false,
     t: 0,
     peel: 0,
     z: -16,
@@ -83,6 +98,7 @@ export function createRide() {
     drops: 0,
     msg: "",
     msgT: 0,
+    events: [],
     score: 0,
     tubeShade: 0,
     wakeT: 0,
@@ -112,8 +128,16 @@ export function createRide() {
   };
 }
 
+// The title screen's camera, in metres from the surfer along ahead / normal / lateral; fov in degrees; shift is the share of the width
+// the rider is moved to the right (the wordmark and PLAY sit on the left). wide: a landscape window, tall: a portrait one.
+export const HERO = {
+  wide: { front: 5.2, up: 0.8, side: -2.0, lookUp: 0.22, lookAhead: 0.1, fov: 31, shift: 0.2 },
+  tall: { front: 6.0, up: 0.8, side: -2.1, lookUp: 0.5, lookAhead: 0.1, fov: 40, shift: 0.1 },
+};
+
 export function resetRide(st, cond, opts = {}) {
   st.mode = opts.mode || "ride";
+  st.hero = !!opts.hero;
   st.t = 0;
   st.peel = 0;
   st.z = opts.z ?? -16;
@@ -141,6 +165,7 @@ export function resetRide(st, cond, opts = {}) {
   st.drops = 0;
   st.msg = opts.msg || "";
   st.msgT = opts.msg ? 1.6 : 0;
+  st.events.length = 0;
   st.score = 0;
   st.tubeShade = 0;
   st.wakeT = 0;
@@ -174,6 +199,7 @@ function wipe(st, msg) {
   st.wipe = st.t;
   st.wipeMsg = msg;
   st.stats.wipe = true;
+  emit(st, { type: "wipe" });
   st.msg = "WIPEOUT";
   st.msgT = 2.1;
 }
@@ -183,6 +209,7 @@ function claim(st) {
   st.mode = "claim";
   st.claim = st.t;
   st.stats.clean = true;
+  emit(st, { type: "clean" });
   st.score += 1000;
   st.msg = "CLEAN EXIT";
   st.msgT = 2.2;
@@ -192,6 +219,7 @@ function claim(st) {
 function kickOut(st) {
   if (st.stats.clean || st.stats.kick || st.mode !== "ride" || st.t < KICK_MIN) return;
   st.stats.kick = true;
+  emit(st, { type: "kick" });
   st.msg = "KICK OUT";
   st.msgT = 1.6;
 }
@@ -264,6 +292,7 @@ export function updateRide(st, dt, input, cond) {
       st.pumpFx.gap = st.stats.pumps > 0 ? period - PUMP_BEAT : 0;
       st.stats.pumps += 1;
       if (timed >= 0.5) st.stats.goodPumps += 1;
+      emit(st, { type: "pump", q: timed });
       st.lastPump = st.t;
     }
     st.pumpWas = input.thr > 0.45;
@@ -324,8 +353,10 @@ export function updateRide(st, dt, input, cond) {
     if (st.mode === "ride") {
       if (inTube) {
         st.tube += dt;
+        const runBefore = st.tubeRun;
         st.tubeRun += dt;
         st.stats.tubeTime += dt;
+        if (Math.floor(st.tubeRun) > Math.floor(runBefore) && st.tubeRun >= 1) emit(st, { type: "tube", run: Math.floor(st.tubeRun), deep });
         st.score += dt * (deep ? 220 : 100);
         if (deep) st.stats.deepTime += dt;
         if (st.s > 0.32) st.stats.committed += dt;
@@ -334,10 +365,11 @@ export function updateRide(st, dt, input, cond) {
         if (st.tubeRun > 1.7) claim(st);
         else st.tubeRun = 0;
       }
-      if (deep && st.tubeRun > 6.2 && !st.spitDone) {
+      if (deep && st.tubeRun > SPIT_RUN && !st.spitDone) {
         st.spit = st.t;
         st.spitDone = true;
         st.stats.spit = true;
+        emit(st, { type: "spit" });
         st.score += 500;
         st.msg = "SPIT";
         st.msgT = 2.3;
@@ -388,6 +420,7 @@ export function updateRide(st, dt, input, cond) {
     if (sg && sg !== st.stats.lastSteer && Math.abs(input.steer) > 0.45) {
       st.stats.turns += 1;
       st.stats.lastSteer = sg;
+      emit(st, { type: "turn" });
     }
     if (st.mode === "claim" && st.t - st.claim > 1.7) finish(st, "Wave over — clean.");
   } else if (st.mode === "wipe") {
@@ -583,6 +616,13 @@ export function syncWorld(world, st, dt, input, cond) {
   st.look.copy(st.pos).addScaledVector(st.ahead, 9).addScaledVector(st.normal, 0.2);
   st.look.y += 0.25;
   st.up.set(0, 1, 0).lerp(st.normal, 0.3).normalize();
+  if (st.hero) {
+    // the title screen: the camera ahead of the rider on the open-face side, close, looking back at the surfer
+    const h = aspect > 1 ? HERO.wide : HERO.tall;
+    st.desired.copy(st.pos).addScaledVector(st.ahead, h.front).addScaledVector(st.normal, h.up).addScaledVector(st.lateral, h.side);
+    st.look.copy(st.pos).addScaledVector(st.normal, h.lookUp).addScaledVector(st.ahead, h.lookAhead);
+    st.up.set(0, 1, 0).lerp(st.normal, 0.12).normalize();
+  }
 
   if (!st.camInit) {
     st.camPos.copy(st.desired);
@@ -606,6 +646,17 @@ export function syncWorld(world, st, dt, input, cond) {
   cam.position.y += Math.sin(st.t * 17) * 0.005;
   cam.up.copy(st.camUp);
   cam.lookAt(st.camLook);
+  // the hero lens (a long lens, the rider shifted toward the right of the frame on a wide screen) only while the title screen is up
+  if (st.hero) {
+    const h = aspect > 1 ? HERO.wide : HERO.tall;
+    cam.fov = h.fov;
+    cam.setViewOffset(innerWidth, innerHeight, -h.shift * innerWidth, 0, innerWidth, innerHeight);
+    world.hero = true;
+  } else if (world.hero) {
+    world.hero = false;
+    cam.clearViewOffset();
+    world.resize();
+  }
 
   const shade = tubeFactor(fr.x, fr.y + 0.8, st.z, st.peel, camCond, st.t);
   st.tubeShade += (shade - st.tubeShade) * Math.min(1, dt * 3);

@@ -10,6 +10,8 @@
 //     on the body seen from behind and cropped to the garment; a body is a bust, three-quarter from the front.
 //     Cards ask for their picture only when they scroll into view (IntersectionObserver), and at most a few milliseconds of
 //     rendering run per frame.
+// The stage backdrop (a disc in the colour of the rarity on show, light cones, the floor) is drawn on a 2D canvas for the stage's
+// size and used as the scene background; the page UI (back button, name plate, skin hexes, tabs, cards, detail plate) is DOM.
 // The surfer is shared with the game: opening the Locker moves its holder into the studio scene and closing puts it back,
 // pose, transforms and dressing exactly as they were (see snapshotSurfer / restoreSurfer), and disposes the studio.
 import * as THREE from "three";
@@ -18,13 +20,13 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { GARMENTS, applyPose } from "./surfer.js";
 import { defaultBottom, isBody } from "./save.js";
 import { dropPrintsExcept, printCacheKeys } from "./printart.js";
-import { itemFlag, lockerFine, lockerListHTML, lockerShellHTML, lockerSkinHTML } from "./ui.js";
+import { LOCKER_TABS, PAL, RARITY, itemFlag, lockerDetailHTML, lockerFine, lockerFocus, lockerListHTML, lockerShellHTML, lockerSkinHTML, lockerTabsHTML, rarityKey } from "./ui.js";
 
 export const THUMB_PX = 160; // stored picture, square
 const THUMB_SUPER = 2; // rendered at this multiple, then downscaled
 const THUMB_CACHE_MAX = 96; // pictures kept; 96 x 160 x 160 x 4 bytes = 9.8 MB
 const THUMB_BUDGET_MS = 10; // rendering time per frame after the first picture of the frame
-const BG_EDGE = "#071219"; // the page colour round the stage; the stage backdrop fades into it
+const BG_EDGE = "#102B3E"; // the page colour round the stage (the stage backdrop is the same colour at its edges)
 const PREVIEW_WEIGHTS = { crouch: 0.14, glide: 0.86, claim: 0, wipe: 0 }; // the same relaxed stand the menu shows
 
 // Pictures survive closing and reopening the Locker (they are plain 2D canvases, no GPU memory). Key: what the picture shows.
@@ -128,6 +130,116 @@ function blobTexture() {
   return new THREE.CanvasTexture(canvas);
 }
 
+// What the disc behind the surfer is coloured by rarity (Basic gets a plain deep-water blue so it stays quiet).
+const DISC = { basic: "#1D4B66", tour: PAL.lagoon, elite: PAL.cobalt, sig: PAL.sodium };
+
+/** The turntable's top: a pale plate with a ring, 24 ticks and one flare notch (the rotation cue of the mockup). */
+function turntableTexture() {
+  const size = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const g = canvas.getContext("2d");
+  const c = size / 2;
+  g.fillStyle = "#9FACB6";
+  g.fillRect(0, 0, size, size);
+  g.beginPath();
+  g.arc(c, c, c * 0.9, 0, Math.PI * 2);
+  g.fillStyle = "#B9C4CC";
+  g.fill();
+  g.lineWidth = 6;
+  g.strokeStyle = PAL.abyss;
+  g.stroke();
+  g.lineWidth = 7;
+  g.strokeStyle = "#6F7F8C";
+  for (let i = 0; i < 24; i++) {
+    const a = (i / 24) * Math.PI * 2;
+    g.beginPath();
+    g.moveTo(c + Math.cos(a) * c * 0.72, c + Math.sin(a) * c * 0.72);
+    g.lineTo(c + Math.cos(a) * c * 0.84, c + Math.sin(a) * c * 0.84);
+    g.stroke();
+  }
+  g.beginPath();
+  g.arc(c, c, c * 0.62, 0, Math.PI * 2);
+  g.lineWidth = 3;
+  g.strokeStyle = "#8A99A6";
+  g.stroke();
+  g.fillStyle = PAL.flare;
+  g.strokeStyle = PAL.abyss;
+  g.lineWidth = 4;
+  g.beginPath();
+  g.moveTo(c * 1.84, c - 14);
+  g.lineTo(c * 1.98, c);
+  g.lineTo(c * 1.84, c + 14);
+  g.closePath();
+  g.fill();
+  g.stroke();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/**
+ * The stage backdrop for a stage of w x h CSS pixels: deep water, a floor band, two light cones and a halftone disc in `color`
+ * centred at (cx, cy) with radius r (all in stage pixels). Flat colours and hard edges (no gradients), as the mockup draws it.
+ */
+function backdropTexture(w, h, color, cx, cy, r, floorY) {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(2, Math.round(w));
+  canvas.height = Math.max(2, Math.round(h));
+  const g = canvas.getContext("2d");
+  g.fillStyle = BG_EDGE;
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = PAL.abyss;
+  g.fillRect(0, floorY, w, h - floorY);
+  // the disc, its halftone, its rim and a dashed inner ring
+  g.beginPath();
+  g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.fillStyle = color;
+  g.fill();
+  g.save();
+  g.clip();
+  const dots = document.createElement("canvas");
+  dots.width = dots.height = 10;
+  const d = dots.getContext("2d");
+  d.fillStyle = "rgba(10,27,43,0.28)";
+  d.beginPath();
+  d.arc(2.5, 2.5, 2, 0, Math.PI * 2);
+  d.fill();
+  g.fillStyle = g.createPattern(dots, "repeat");
+  g.fillRect(cx - r, cy - r, r * 2, r * 2);
+  g.restore();
+  g.lineWidth = Math.max(3, r * 0.023);
+  g.strokeStyle = PAL.abyss;
+  g.beginPath();
+  g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.stroke();
+  g.lineWidth = 2;
+  g.setLineDash([3, 9]);
+  g.beginPath();
+  g.arc(cx, cy, r * 0.86, 0, Math.PI * 2);
+  g.stroke();
+  g.setLineDash([]);
+  // two flat light cones from the top of the stage down to the floor, over everything
+  g.fillStyle = "rgba(243,234,215,0.12)";
+  g.beginPath();
+  g.moveTo(cx - 16, 0);
+  g.lineTo(cx + 16, 0);
+  g.lineTo(cx + r * 0.95, floorY);
+  g.lineTo(cx - r * 0.95, floorY);
+  g.fill();
+  g.fillStyle = "rgba(243,234,215,0.10)";
+  g.beginPath();
+  g.moveTo(cx - 8, 0);
+  g.lineTo(cx + 8, 0);
+  g.lineTo(cx + r * 0.5, floorY);
+  g.lineTo(cx - r * 0.5, floorY);
+  g.fill();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function buildStudio(renderer) {
   const scene = new THREE.Scene();
   const turntable = new THREE.Group();
@@ -152,10 +264,12 @@ function buildStudio(renderer) {
 
   // the floor of the turntable: a disc and a soft contact shadow under the board (placed once the surfer is posed)
   const stage = new THREE.Group();
-  const plate = new THREE.Mesh(
-    new THREE.CylinderGeometry(1, 1, 0.03, 64),
-    new THREE.MeshStandardMaterial({ color: 0x10171c, roughness: 0.85, metalness: 0.1 }),
-  );
+  const plateTop = turntableTexture();
+  const plate = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.03, 64), [
+    new THREE.MeshStandardMaterial({ color: 0x2b3a46, roughness: 0.8, metalness: 0.1 }),
+    new THREE.MeshStandardMaterial({ map: plateTop, roughness: 0.85, metalness: 0.05 }),
+    new THREE.MeshStandardMaterial({ color: 0x2b3a46, roughness: 0.8, metalness: 0.1 }),
+  ]);
   const blob = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false }),
@@ -163,10 +277,10 @@ function buildStudio(renderer) {
   stage.add(plate, blob);
   turntable.add(stage);
 
-  const stageBg = radialTexture(256, [[0, "#34444f"], [0.5, "#1a2832"], [1, BG_EDGE]]);
+  const stageBg = backdropTexture(64, 64, DISC.basic, 32, 32, 20, 48);
   const thumbBg = radialTexture(64, [[0, "#3c4c58"], [1, "#1a252e"]]);
   scene.background = stageBg;
-  return { scene, turntable, stage, plate, blob, stageBg, thumbBg, envTarget };
+  return { scene, turntable, stage, plate, blob, stageBg, thumbBg, envTarget, backdrop: { key: "", w: 0, h: 0 } };
 }
 
 function disposeStudio(studio) {
@@ -174,8 +288,10 @@ function disposeStudio(studio) {
     if (obj === studio.scene) return;
     if (obj.geometry) obj.geometry.dispose();
     if (obj.material) {
-      if (obj.material.map) obj.material.map.dispose();
-      obj.material.dispose();
+      for (const material of Array.isArray(obj.material) ? obj.material : [obj.material]) {
+        if (material.map) material.map.dispose();
+        material.dispose();
+      }
     }
   });
   studio.stageBg.dispose();
@@ -204,6 +320,8 @@ export function openLockerView(ctx) {
   const fineEl = panels.querySelector("#lk-fine");
   const skinEl = panels.querySelector("#lk-skin");
   const backEl = panels.querySelector("#locker-back");
+  const tabsEl = panels.querySelector("#lk-tabs");
+  const detailEl = panels.querySelector("#lk-detail");
 
   // what to put back
   const snap = snapshotSurfer(surfer);
@@ -236,6 +354,7 @@ export function openLockerView(ctx) {
   let closed = false;
   let ready = false; // the studio's shaders are compiled (off the main thread); until then the stage shows the page colour
   let sel = null; // the id on the preview that is not equipped (a locked item), or an owned item just picked
+  let tab = "board"; // the category on show (LOCKER_TABS)
   let previewLoadout = { ...save.loadout };
   let previewDirty = true;
   let spin = { yaw: 0.6, auto: true, resumeAt: 0, speed: 0.5 };
@@ -350,10 +469,12 @@ export function openLockerView(ctx) {
     framing.plateR = r;
   }
 
+  // The name plate over the stage: what the surfer wears, or the locked item being tried on.
   function paintBadge() {
     const l = previewLoadout;
     const outfit = byId[l.bottom];
     const board = byId[l.board];
+    const body = byId[l.body];
     const trying = sel && !save.owned.includes(sel);
     badgeEl.className = trying ? "lk-badge trying" : "lk-badge";
     badgeEl.replaceChildren();
@@ -365,12 +486,23 @@ export function openLockerView(ctx) {
     };
     if (trying) {
       const item = byId[sel];
-      line("l1", `Trying on · ${item.name}`);
+      line("l1", `Trying on · ${item.name}`.toUpperCase());
       line("l2", `LOCKED · ${itemFlag(item, false)} · preview only, not equipped`);
     } else {
-      line("l1", `Wearing · ${outfit.name}`);
-      line("l2", board.name);
+      line("l1", `${body.name} · ${outfit.name}`.toUpperCase());
+      line("l2", `Wearing · ${board.name}`);
     }
+  }
+
+  // The colour of the disc behind the surfer: the rarity on trial, else the rarest thing worn.
+  function discKey() {
+    if (sel && byId[sel]) return rarityKey(byId[sel]);
+    let best = "basic";
+    for (const id of [previewLoadout.board, previewLoadout.bottom]) {
+      const key = byId[id] ? rarityKey(byId[id]) : "basic";
+      if (RARITY[key].rank > RARITY[best].rank) best = key;
+    }
+    return best;
   }
 
   // -- the list ------------------------------------------------------------------------------------------------------------
@@ -400,7 +532,10 @@ export function openLockerView(ctx) {
   function buildList() {
     const scroll = listEl.scrollTop;
     if (observer) observer.disconnect();
-    listEl.innerHTML = lockerListHTML(save, sel);
+    listEl.innerHTML = lockerListHTML(save, sel, tab);
+    tabsEl.innerHTML = lockerTabsHTML(save, tab);
+    detailEl.innerHTML = lockerDetailHTML(lockerFocus(save, tab, sel, byId), save);
+    detailEl.hidden = tab === "shelf";
     skinEl.innerHTML = lockerSkinHTML(save);
     fineEl.textContent = lockerFine(save);
     listEl.scrollTop = scroll;
@@ -451,6 +586,7 @@ export function openLockerView(ctx) {
   // -- the stage ------------------------------------------------------------------------------------------------------------
   const drag = { id: null, x: 0 };
   function onDown(e) {
+    if (e.target.closest("button")) return; // the back button and the skin hexes are on the stage: they are clicks, not a turn
     drag.id = e.pointerId;
     drag.x = e.clientX;
     spin.auto = false;
@@ -473,6 +609,18 @@ export function openLockerView(ctx) {
   stageEl.addEventListener("pointerup", onUp);
   stageEl.addEventListener("pointercancel", onUp);
   listEl.addEventListener("click", onListClick);
+  // a category tab: another set of cards (and, for the outfit tab, the shorts or the sets of the body on show)
+  const onTab = (e) => {
+    const button = e.target.closest("[data-tab]");
+    if (!button || !LOCKER_TABS.includes(button.dataset.tab) || button.dataset.tab === tab) return;
+    tab = button.dataset.tab;
+    sel = null;
+    previewLoadout = { ...save.loadout };
+    previewDirty = true;
+    listEl.scrollTop = 0;
+    buildList();
+  };
+  tabsEl.addEventListener("click", onTab);
   // a skin swatch: saved like the menu's picker; the preview and every picture that shows skin follow at once
   const onSkin = (e) => {
     const swatch = e.target.closest("[data-skin]");
@@ -522,8 +670,21 @@ export function openLockerView(ctx) {
       camera.updateMatrixWorld(true);
       const ndc = pts.map((p) => p.clone().project(camera));
       lastFit = { dist, top: ndc[0].y, bottom: ndc[1].y, side: Math.max(Math.abs(ndc[2].x), Math.abs(ndc[3].x)) };
-      if (lastFit.top <= 0.88 && lastFit.bottom >= -0.97 && lastFit.side <= 0.97) break;
+      if (lastFit.top <= 0.88 && lastFit.bottom >= -0.86 && lastFit.side <= 0.97) break;
       dist *= 1.03;
+    }
+    // the backdrop, drawn for this stage: the disc sits behind the surfer, the floor band at the turntable
+    const screenY = (y) => ((1 - new THREE.Vector3(0, y, 0).project(camera).y) / 2) * rect.height;
+    const plateY = screenY(framing.plateY);
+    const headY = screenY(framing.topY);
+    const radius = Math.min(rect.width * 0.46, Math.max(40, (plateY - headY) * 0.62));
+    const centreY = (plateY + headY) / 2 - radius * 0.04;
+    const colourKey = discKey();
+    const bgKey = `${colourKey}|${Math.round(rect.width)}x${Math.round(rect.height)}|${Math.round(centreY / 4)}|${Math.round(radius / 4)}`;
+    if (studio.backdrop.key !== bgKey) {
+      studio.backdrop.key = bgKey;
+      studio.stageBg.dispose();
+      studio.stageBg = backdropTexture(rect.width, rect.height, DISC[colourKey], rect.width / 2, centreY, radius, Math.min(rect.height - 8, plateY - rect.height * 0.09));
     }
     studio.scene.background = studio.stageBg;
     renderer.setRenderTarget(stageRT);
@@ -707,6 +868,7 @@ export function openLockerView(ctx) {
     stageEl.removeEventListener("pointerup", onUp);
     stageEl.removeEventListener("pointercancel", onUp);
     listEl.removeEventListener("click", onListClick);
+    tabsEl.removeEventListener("click", onTab);
     skinEl.removeEventListener("click", onSkin);
     backEl.removeEventListener("click", onBack);
     if (observer) observer.disconnect();
@@ -785,6 +947,8 @@ export function openLockerView(ctx) {
         selected: sel,
         previewLoadout: { ...previewLoadout },
         trying: !!(sel && !save.owned.includes(sel)),
+        disc: discKey(),
+        tab,
         badge: badgeEl.innerText,
         framing,
         fit: lastFit,

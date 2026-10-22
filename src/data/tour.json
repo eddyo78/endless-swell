@@ -19,6 +19,27 @@
       "extraSeconds": 12
     }
   },
+  "combo": {
+    "_about": "The riding combo (src/hud.js shows it; competition.js comboStep() is the rule). A chain is built from the ride's real moves: each move adds its points, and the chain breaks (back to 0) on a wipeout or after holdSeconds without a move. The meter has `segments` steps, one chain point each. The multiplier is the highest tier whose `at` the chain has reached. It is shown on the HUD and is NOT added to the judged wave score (the judging scale is untouched): whether it should feed the judged score is Ed's call.",
+    "holdSeconds": 4,
+    "segments": 12,
+    "moves": {
+      "pump": 1,
+      "perfectPump": 2,
+      "turn": 1,
+      "tubeSecond": 1,
+      "deepTubeSecond": 2,
+      "spit": 3
+    },
+    "perfectPumpAt": 0.85,
+    "goodPumpAt": 0.5,
+    "tiers": [
+      { "at": 0, "x": 1 },
+      { "at": 3, "x": 2 },
+      { "at": 6, "x": 3 },
+      { "at": 9, "x": 4 }
+    ]
+  },
   "playLog": {
     "_about": "The play log kept in the save so difficulty can be tuned from real play: the last maxWaves waves and the last maxHeats heats. Nothing is sent anywhere; Shift+L in the game saves the log as a JSON file.",
     "version": 1,

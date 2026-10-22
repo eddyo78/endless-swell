@@ -101,7 +101,7 @@ try {
     await ok("a version 1 save opens at Season 3 · Event 3 with every owned item, and the version 1 key is left alone", async () => {
       assert.deepEqual(await S(page, (s) => s.event()), { season: 3, event: 3, attempt: 0 });
       const menu = await text(page);
-      assert.match(menu, /Season 3 · Event 3/);
+      assert.match(menu, /Season 3 · Event 3/i);
       assert.doesNotMatch(menu, NOT_A_LEVEL);
       const owned = await S(page, (s) => s.save().owned);
       for (const id of ["bikini-sunset", "board-tiger", "board-stripe", "rash-reef-f", "fullsuit-blue-f", "trunks-palm"]) assert.ok(owned.includes(id), id);
@@ -125,9 +125,11 @@ try {
   const { page, context } = await open(false);
   await ok("a new save: the menu says Season 1 · Event 1, shows the first rank and an empty trophy shelf, and no level number", async () => {
     const menu = await text(page);
-    assert.match(menu, /Season 1 · Event 1 is waiting/);
-    assert.match(menu, /Qualifier · 0 pts · 100 to Challenger/);
-    assert.match(menu, /Trophy shelf: empty/);
+    assert.match(menu, /Season 1 · Event 1/i);
+    assert.match(menu, /\bPlay\b/i);
+    assert.match(menu, /Qualifier/i);
+    assert.match(menu, /0 pts · 100 to Challenger/);
+    assert.match(menu, /Trophy shelf: empty/i);
     assert.doesNotMatch(menu, NOT_A_LEVEL);
   });
   await ok("the brief names the break, the swell and the rule, as Season 1 · Event 1", async () => {
@@ -160,8 +162,9 @@ try {
     assert.equal(stored.v, 2);
     assert.equal(stored.event, 2);
     assert.equal(await page.evaluate(() => localStorage.getItem("endless-swell-save-v1")), null, "a new player gets no version 1 key");
-    assert.match(await text(page), /Season 1 · Event 2 is waiting/);
-    assert.match(await text(page), /Qualifier · 50 pts · 50 to Challenger/);
+    assert.match(await text(page), /Season 1 · Event 2/i);
+    assert.match(await text(page), /Qualifier/i);
+    assert.match(await text(page), /50 pts · 50 to Challenger/);
   });
   await ok("losing the first heat is a failed event: out of the event, 10 points, retry on the same event, a new draw", async () => {
     await click(page, "#play-tour");
@@ -229,9 +232,9 @@ try {
     assert.deepEqual(save.trophies.map((x) => [x.season, x.place]), [[1, 2]]);
     await click(page, "#end-menu");
     const menu = await text(page);
-    assert.match(menu, /Trophy shelf · 1/);
-    assert.match(menu, /Season 1 · Runner-up/);
-    assert.match(menu, /Season 2 · Event 1 is waiting/);
+    assert.match(menu, /Trophy shelf · 1/i);
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll(".m-shelf .tr")].map((el) => el.title)), ["Season 1 Finale · Runner-up"]);
+    assert.match(menu, /Season 2 · Event 1/i);
   });
   await ok("gear arrives: placement pieces are saved as recipes and listed in the Locker for the body won with", async () => {
     const save = await S(page, (s) => s.save());
@@ -240,19 +243,27 @@ try {
     await click(page, "#open-locker");
     const t = await text(page);
     assert.match(t, /pieces won by placement/);
-    const earned = await page.evaluate(() => [...document.querySelectorAll(".item")].filter((b) => /Earned ·/.test(b.innerText)).length);
-    assert.equal(earned, save.gear.length, `${earned} earned items listed for ${save.gear.length} recipes`);
+    // earned pieces are listed on the Board tab (boards) and the Shorts or Sets tab (outfits, sets, suits)
+    const earnedOn = async (tab) => {
+      await page.click(`#lk-tabs [data-tab="${tab}"]`);
+      return page.evaluate(() => [...document.querySelectorAll(".item")].filter((b) => /Earned ·/.test(b.innerText)).map((b) => b.dataset.equip));
+    };
+    const onBoards = await earnedOn("board");
+    const onOutfits = await earnedOn("outfit");
+    assert.equal(onBoards.length + onOutfits.length, save.gear.length, `${onBoards.length + onOutfits.length} earned items listed for ${save.gear.length} recipes`);
     // wear one generated board and one generated outfit
-    const ids = await page.evaluate(() => [...document.querySelectorAll(".item")].filter((b) => /Earned ·/.test(b.innerText)).map((b) => b.dataset.equip));
-    const board = ids.find((id) => id.startsWith("gen:board"));
+    const board = onBoards.find((id) => id.startsWith("gen:board"));
     assert.ok(board, "a generated board");
+    await page.click('#lk-tabs [data-tab="board"]');
     await page.click(`[data-equip="${board}"]`);
     await page.evaluate(() => window.__surf.advance(0.05));
     assert.equal((await S(page, (s) => s.save().loadout.board)), board);
-    const top = ids.find((id) => id.startsWith("gen:set") || id.startsWith("gen:bottom") || id.startsWith("gen:suit"));
+    const top = onOutfits.find((id) => id.startsWith("gen:set") || id.startsWith("gen:bottom") || id.startsWith("gen:suit"));
     if (top) {
+      await page.click('#lk-tabs [data-tab="outfit"]');
       await page.click(`[data-equip="${top}"]`);
       await page.evaluate(() => window.__surf.advance(0.05));
+      assert.equal((await S(page, (s) => s.save().loadout.bottom)), top);
     }
     await click(page, "#locker-back");
     // the reload keeps it
@@ -493,6 +504,126 @@ try {
       assert.equal(await p3.evaluate(() => window.__dl.length), 0);
     });
     await c3.close();
+  }
+  // ---- the Reef Poster screens: title, settings, pause and the riding display (a fresh player) ----------------------------------
+  {
+    const { page: h, context: ch } = await open(false);
+    await ok("title screen: one PLAY, four icon tiles, no surfer or skin pickers and no Quality, Restart or fps debris; Enter plays the next event", async () => {
+      for (const id of ["#play-tour", "#open-locker", "#play-free", "#open-help", "#open-settings"]) assert.ok(await h.$(id), `${id} is on the title screen`);
+      assert.deepEqual(await h.evaluate(() => [...document.querySelectorAll(".m-tile .l")].map((e) => e.textContent)), ["Locker", "Free surf", "How to", "Settings"]);
+      assert.equal(await h.evaluate(() => document.querySelectorAll("[data-skin], [data-body], .swatch, .bodybtn").length), 0, "the surfer and skin pickers moved to the Locker");
+      assert.equal(await h.evaluate(() => document.querySelectorAll("#qbtn, #rbtn, #fps, .btns").length), 0, "no Quality, Restart or fps element exists");
+      assert.doesNotMatch(await text(h), /Quality|Restart|fps/i);
+      await h.keyboard.press("Enter");
+      await h.evaluate(() => window.__surf.advance(0.05));
+      assert.equal(await S(h, (s) => s.mode()), "brief", "Enter on the title screen opens the next event");
+      await S(h, (s) => s.menu());
+    });
+    await ok("settings: Quality lives here (saved, applied), Back returns to the title screen, and the keys are listed", async () => {
+      await click(h, "#open-settings");
+      const t = await text(h);
+      assert.match(t, /Picture quality/i);
+      assert.match(t, /Esc/);
+      assert.match(t, /Restart|restarts/i);
+      assert.equal(await S(h, (s) => s.quality()), "high");
+      await click(h, '[data-quality="low"]');
+      assert.equal(await S(h, (s) => s.quality()), "low");
+      assert.equal(await h.evaluate(() => JSON.parse(localStorage.getItem("endless-swell-save-v2")).quality), "low");
+      assert.equal(await h.evaluate(() => document.querySelector('[data-quality="low"]').getAttribute("aria-pressed")), "true");
+      await click(h, '[data-quality="high"]');
+      assert.equal(await S(h, (s) => s.quality()), "high");
+      await click(h, "#settings-back");
+      assert.ok(await h.$("#play-tour"), "Back returns to the title screen");
+    });
+    await ok("riding display: the heat score, clock, round, placing and both scores are shown, with no Quality, Restart or fps on the water", async () => {
+      await click(h, "#play-tour");
+      await click(h, "#begin-heat");
+      await h.evaluate(() => window.__surf.advance(0.5));
+      const got = await h.evaluate(() => ({
+        label: document.querySelector("#score-label").textContent,
+        time: document.querySelector("#h-time").textContent,
+        cap: document.querySelector("#h-cap").textContent,
+        stand: document.querySelector("#h-stand").textContent,
+        chips: [...document.querySelectorAll("#h-board > div")].map((e) => e.innerText.replace(/\s+/g, " ")),
+        ladder: document.querySelectorAll("#h-ladder i").length,
+        strip: document.querySelector("#priority").innerText,
+        debris: document.querySelectorAll("#qbtn, #rbtn, #fps").length,
+        pause: !!document.querySelector("#pausebtn"),
+      }));
+      assert.match(got.label, /Heat score/i);
+      assert.match(got.time, /^\d:\d\d$/);
+      assert.equal(got.cap, "Round of 16");
+      assert.match(got.stand, /1st|2nd|Even/);
+      assert.equal(got.chips.length, 2);
+      assert.ok(got.chips.some((c) => /^You /i.test(c)), JSON.stringify(got.chips));
+      assert.equal(got.ladder, 4);
+      assert.match(got.strip, /Season 1 · Event 1\s+Wave 1\/3 · priority/i);
+      assert.equal(got.debris, 0);
+      assert.ok(got.pause);
+      const heat = await S(h, (s) => s.heat());
+      assert.equal(got.time, `${Math.floor(Math.ceil(heat.max - heat.clock) / 60)}:${String(Math.ceil(heat.max - heat.clock) % 60).padStart(2, "0")}`);
+    });
+    await ok("riding display: on a ridden wave the combo, the multiplier and the popups follow the ride's real events, and the judged score on the plate is the judges' (not the combo)", async () => {
+      await S(h, (s) => s.setAutopilot(true));
+      let seen = new Set();
+      let last = null;
+      for (let i = 0; i < 700 && !(seen.has("barrel") && last && last.combo.x >= 2); i++) {
+        await h.evaluate(() => window.__surf.advance(0.1));
+        last = await S(h, (s) => s.hud());
+        for (const p of last.popups) seen.add(p);
+      }
+      assert.ok(seen.has("barrel"), `no barrel popup in a whole autopilot wave (${[...seen].join(", ")})`);
+      assert.ok(last.combo.x >= 2, `combo multiplier ${last.combo.x}`);
+      const dom = await h.evaluate(() => ({ combo: document.querySelector("#h-combo").textContent, mult: document.querySelector("#h-mult-t").textContent, on: document.querySelector("#h-mult").classList.contains("on"), lit: document.querySelectorAll("#h-bar i.a, #h-bar i.b, #h-bar i.c").length, wave: document.querySelector("#h-wave").textContent, score: document.querySelector("#score").textContent, popup: !!document.querySelector("#popups .pop") }));
+      assert.equal(dom.combo, String(last.combo.moves));
+      assert.equal(dom.mult, `x${last.combo.x}`);
+      assert.ok(dom.on);
+      assert.equal(dom.lit, last.combo.points);
+      assert.match(dom.wave, /This wave \d+\.\d/);
+      // the big number is the heat total (the best two judged waves, this one included), exactly the judges' number
+      const judged = Number(dom.wave.match(/(\d+\.\d)/)[1]);
+      assert.equal(Number(dom.score), judged, "with one wave on the water the heat total is that wave's judged score");
+      assert.ok(dom.popup);
+      await S(h, (s) => s.setAutopilot(false));
+    });
+    await ok("pause: the button and Esc freeze the ride (the clock and the wave stand still), Resume goes on, Restart (R) starts the heat again, Menu leaves", async () => {
+      await S(h, (s) => { s.pause = false; });
+      const z = () => S(h, (s) => s.state().z);
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      await wait(250);
+      const moving = await z();
+      await wait(250);
+      assert.notEqual(await z(), moving, "the ride moves when not paused");
+      await click(h, "#pausebtn");
+      assert.equal((await S(h, (s) => s.hud())).paused, true);
+      assert.equal(await h.evaluate(() => !document.querySelector("#pause").hidden), true);
+      await wait(120);
+      const frozen = await z();
+      const clock = await S(h, (s) => s.heat().clock);
+      await wait(400);
+      assert.equal(await z(), frozen, "the wave moved while paused");
+      assert.equal(await S(h, (s) => s.heat().clock), clock, "the heat clock ran while paused");
+      await h.click("#pause-resume");
+      assert.equal((await S(h, (s) => s.hud())).paused, false);
+      await wait(300);
+      assert.notEqual(await z(), frozen, "the ride does not go on after Resume");
+      await h.keyboard.press("Escape");
+      assert.equal((await S(h, (s) => s.hud())).paused, true, "Esc pauses");
+      await h.keyboard.press("Escape");
+      assert.equal((await S(h, (s) => s.hud())).paused, false, "Esc again resumes");
+      await h.keyboard.press("Escape");
+      await h.click("#pause-restart");
+      assert.equal((await S(h, (s) => s.hud())).paused, false, "Restart leaves the pause");
+      assert.equal(await S(h, (s) => s.mode()), "paddle", "Restart starts the heat again at the paddle");
+      assert.equal(await S(h, (s) => s.heat().clock) < 1, true);
+      await click(h, "#pausebtn");
+      await h.click("#pause-menu");
+      assert.equal(await S(h, (s) => s.mode()), "menu");
+      assert.equal((await S(h, (s) => s.hud())).paused, false);
+      assert.equal(await h.evaluate(() => document.querySelector("#pause").hidden), true);
+      await S(h, (s) => { s.pause = true; });
+    });
+    await ch.close();
   }
   await ok("no page errors or console errors in the whole run", async () => {
     assert.deepEqual(problems, []);

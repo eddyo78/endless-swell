@@ -9,8 +9,9 @@
 // Then prints the win-odds table (INFERENCE: the proposal's player model, not measured play) for the design target.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { activeTwists, aiHeatTotal, createBracket, eventDials, generateTour, judgeWave, locationById, mulberry32, seasonCalendar, seasonTwist, stopStatus, warmupFor } from "../src/competition.js";
-import { autopilot, createRide, resetRide, updateRide } from "../src/ride.js";
+import { activeTwists, aiHeatTotal, comboLayout, comboMultiplier, comboStep, comboValue, createBracket, eventDials, generateTour, judgeWave, locationById, mulberry32, seasonCalendar, seasonTwist, stopStatus, warmupFor } from "../src/competition.js";
+import { SPIT_RUN, autopilot, createRide, resetRide, updateRide } from "../src/ride.js";
+import { newCombo } from "../src/competition.js";
 import { SEASON_LENGTH, eventNumber, seasonEvent } from "../src/season.js";
 
 const quiet = process.argv.includes("--quiet");
@@ -459,6 +460,76 @@ ok("warm-up: a bad rider (wipes a third of the time, short pumping rides) wins a
   assert.ok(p >= 0.85, `Event 1 heat win ${p}`);
   assert.ok(1 - (1 - p * p) ** 2 >= 0.95, `Event 1 passed within two tries ${1 - (1 - p * p) ** 2}`);
   for (let i = 0; i < 3; i++) assert.ok(poor[i].after >= poor[i].before, `Event ${i + 1}: ${poor[i].after} vs ${poor[i].before}`);
+});
+
+// ---- the riding combo (src/hud.js shows it; competition.js comboStep() is the rule) ---------------------------------------------
+ok("combo: moves add the points tour.json gives them, the multiplier is the highest tier reached, a sloppy pump adds nothing", () => {
+  const c = tune.combo;
+  const combo = newCombo();
+  comboStep(combo, [{ type: "pump", q: 0.2, t: 0.1 }], 0.1);
+  assert.equal(combo.points, 0, "a pump under goodPumpAt is not a move");
+  comboStep(combo, [{ type: "pump", q: c.goodPumpAt, t: 0.2 }], 0.2);
+  assert.equal(combo.points, c.moves.pump);
+  comboStep(combo, [{ type: "pump", q: 1, t: 0.7 }, { type: "turn", t: 0.8 }], 0.8);
+  assert.equal(combo.points, c.moves.pump + c.moves.perfectPump + c.moves.turn);
+  assert.equal(combo.moves, 3);
+  for (const tier of c.tiers) assert.equal(comboMultiplier(tier.at), tier.x, `tier at ${tier.at}`);
+  assert.equal(comboMultiplier(c.tiers[c.tiers.length - 1].at + 5), c.tiers[c.tiers.length - 1].x);
+  assert.equal(comboValue({ type: "tube", deep: true }), c.moves.deepTubeSecond);
+  assert.equal(comboValue({ type: "tube", deep: false }), c.moves.tubeSecond);
+  assert.equal(comboValue({ type: "spit" }), c.moves.spit);
+  assert.equal(comboValue({ type: "clean" }), 0);
+});
+ok("combo: the chain breaks on a wipeout and after holdSeconds without a move, the meter never passes its size, and the layout is the data", () => {
+  const c = tune.combo;
+  const combo = newCombo();
+  for (let i = 0; i < 40; i++) comboStep(combo, [{ type: "spit", t: i * 0.1 }], i * 0.1);
+  assert.equal(combo.points, c.segments, "the meter is capped at its segments");
+  assert.equal(combo.x, c.tiers[c.tiers.length - 1].x);
+  comboStep(combo, [{ type: "wipe", t: 4.1 }], 4.1);
+  assert.deepEqual([combo.points, combo.moves, combo.broke, combo.x], [0, 0, true, 1]);
+  const held = newCombo();
+  comboStep(held, [{ type: "turn", t: 1 }], 1);
+  comboStep(held, [], 1 + c.holdSeconds - 0.01);
+  assert.equal(held.points, 1, "inside the hold time the chain stays");
+  comboStep(held, [], 1 + c.holdSeconds + 0.01);
+  assert.deepEqual([held.points, held.moves, held.broke], [0, 0, true]);
+  assert.equal(held.best, 1, "the best chain is remembered");
+  assert.deepEqual(comboLayout.tiers, c.tiers);
+  assert.equal(comboLayout.segments, c.segments);
+});
+ok("combo: it is shown, not scored: judgeWave() gives the same wave score whatever the chain", () => {
+  const tour = generateTour(12);
+  const st = createRide();
+  resetRide(st, tour, { mode: "ride", z: -16, maxRide: 16 });
+  for (let i = 0; i < 60 * 14 && !st.ended; i++) updateRide(st, 1 / 60, autopilot(st, tour), tour);
+  const before = JSON.stringify(judgeWave(st.stats, tour));
+  const combo = newCombo();
+  comboStep(combo, [{ type: "spit", t: 1 }, { type: "spit", t: 2 }, { type: "spit", t: 3 }], 3);
+  assert.equal(JSON.stringify(judgeWave(st.stats, tour)), before);
+});
+ok("ride events: a real ride emits the moves the HUD turns into popups (pumps, turns, tube seconds with their depth), in time order, once each", () => {
+  const tour = generateTour(12);
+  const st = createRide();
+  resetRide(st, tour, { mode: "ride", z: -16, maxRide: 22 });
+  const seen = [];
+  for (let i = 0; i < 60 * 20 && !st.ended; i++) {
+    updateRide(st, 1 / 60, autopilot(st, tour), tour);
+    seen.push(...st.events);
+    st.events.length = 0;
+  }
+  const kinds = new Set(seen.map((e) => e.type));
+  for (const k of ["pump", "turn", "tube"]) assert.ok(kinds.has(k), `no ${k} event in a whole autopilot ride (${[...kinds].join(", ")})`);
+  for (let i = 1; i < seen.length; i++) assert.ok(seen[i].t >= seen[i - 1].t, "events are in time order");
+  const tubes = seen.filter((e) => e.type === "tube").map((e) => e.run);
+  assert.ok(tubes.length >= 2, `only ${tubes.length} tube seconds announced in a whole ride`);
+  assert.equal(tubes[0], 1, "the first tube second is 1");
+  for (let i = 1; i < tubes.length; i++) assert.ok(tubes[i] === tubes[i - 1] + 1 || tubes[i] === 1, `a tube second is announced once, in order: ${tubes.join(",")}`);
+  assert.equal(st.stats.pumps, seen.filter((e) => e.type === "pump").length, "one pump event per pump");
+  assert.equal(st.stats.turns, seen.filter((e) => e.type === "turn").length, "one turn event per counted turn");
+  assert.equal(seen.filter((e) => e.type === "spit").length, st.stats.spit ? 1 : 0);
+  assert.equal(seen.filter((e) => e.type === "wipe").length, st.stats.wipe ? 1 : 0);
+  assert.equal(SPIT_RUN, 6.2, "the spit run the dial counts toward");
 });
 
 console.log(`tour checks passed (${checks} groups)`);

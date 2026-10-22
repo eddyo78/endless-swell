@@ -2,8 +2,10 @@
 //   node scripts/check-locker.mjs [--skip-build]
 // Builds (unless --skip-build), serves dist/ on a local port for the life of the script, and for the male at desktop width and the
 // female at desktop and phone width asserts:
-//   - the studio is ready and every card in the list (scrolled through, so every lazy picture is asked for) has a picture that is
-//     not blank (enough pixels differ from the card's own backdrop);
+//   - the studio is ready and every card on the three card tabs (Board, Shorts or Sets, Surfer; each scrolled through, so every lazy
+//     picture is asked for) has a picture that is not blank (enough pixels differ from the card's own backdrop); the four tabs
+//     exist, the Shelf tab shows the rank and the cups, the rarity frames and the detail plate are right for the card on trial, and
+//     the disc behind the surfer takes the rarity on show (Basic when only starter gear is worn, Signature for a premium board);
 //   - the preview renders (the stage area is not a flat colour) and the whole surfer is inside the frame: the head has at least 6%
 //     of the stage above it and the plate and its sides are inside (projected extents, window.__surf.locker().state().fit);
 //   - the skin swatches in the Locker change the tone, save it and repaint the preview and the body cards; and skin (six tones) and
@@ -132,6 +134,13 @@ try {
     await page.waitForFunction(() => window.__surf.locker() === null, { timeout: 10000 });
     await new Promise((r) => setTimeout(r, 150));
   };
+  // Switch the category tab and wait for the pictures it asks for.
+  const tab = async (page, name) => {
+    await page.click(`#lk-tabs [data-tab="${name}"]`);
+    await frames(page, 3);
+    await page.waitForFunction(() => window.__surf.locker().pending === 0, { timeout: 60000 });
+    await frames(page, 2);
+  };
   const frames = (page, n = 4) => page.evaluate((count) => new Promise((resolve) => { let i = 0; const tick = () => (++i >= count ? resolve() : requestAnimationFrame(tick)); requestAnimationFrame(tick); }), n);
   const gl = (page) => page.evaluate(() => {
     const w = window.__surf.world();
@@ -149,35 +158,55 @@ try {
     await openLocker(page);
     console.log(`     ${c.name}: ${JSON.stringify(await page.evaluate(() => ({ ...window.__surf.locker().stats, pictures: window.__surf.lockerPictures() })))}`);
 
-    await ok(`${c.name}: every card in the list gets a picture that is not blank`, async () => {
-      const total = await page.evaluate(() => document.querySelectorAll("#lk-list .item").length);
-      assert.ok(total >= 13, `${total} cards`);
-      // scroll through the list in steps so each lazy card is on screen, waiting for the pictures each time
-      const height = await page.evaluate(() => document.querySelector("#lk-list").scrollHeight);
-      for (let y = 0; y <= height; y += 220) {
-        await page.evaluate((top) => { document.querySelector("#lk-list").scrollTop = top; }, y);
-        await page.waitForFunction(() => window.__surf.locker().pending === 0, { timeout: 60000 });
-        await frames(page, 3);
-      }
-      const cards = await page.evaluate(() => [...document.querySelectorAll("#lk-list .item")].map((card) => {
-        const canvas = card.querySelector("canvas");
-        const ctx = canvas.getContext("2d");
-        const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const bg = [data[0], data[1], data[2]];
-        let differ = 0;
-        for (let i = 0; i < data.length; i += 4) {
-          if (Math.max(Math.abs(data[i] - bg[0]), Math.abs(data[i + 1] - bg[1]), Math.abs(data[i + 2] - bg[2])) > 30) differ++;
+    await ok(`${c.name}: there are four category tabs, and every card on the Board, Shorts or Sets, and Surfer tabs gets a picture that is not blank`, async () => {
+      const tabs = await page.evaluate(() => [...document.querySelectorAll("#lk-tabs [data-tab]")].map((b) => b.dataset.tab));
+      assert.deepEqual(tabs, ["board", "outfit", "surfer", "shelf"]);
+      let total = 0;
+      for (const name of ["board", "outfit", "surfer"]) {
+        await tab(page, name);
+        assert.equal(await page.evaluate(() => document.querySelector("#lk-tabs .on").dataset.tab), name);
+        const count = await page.evaluate(() => document.querySelectorAll("#lk-list .item").length);
+        assert.ok(count >= 2, `${name}: ${count} cards`);
+        total += count;
+        // scroll through the list in steps so each lazy card is on screen, waiting for the pictures each time
+        const height = await page.evaluate(() => document.querySelector("#lk-list").scrollHeight);
+        for (let y = 0; y <= height; y += 220) {
+          await page.evaluate((top) => { document.querySelector("#lk-list").scrollTop = top; }, y);
+          await page.waitForFunction(() => window.__surf.locker().pending === 0, { timeout: 60000 });
+          await frames(page, 3);
         }
-        return { id: card.dataset.equip, painted: canvas.dataset.pic === "1", differ: differ / (width * height) };
-      }));
-      assert.equal(cards.length, total);
-      for (const card of cards) {
-        assert.ok(card.painted, `${card.id}: no picture was drawn`);
-        assert.ok(card.differ >= 0.04, `${card.id}: picture looks blank (${(card.differ * 100).toFixed(1)}% of pixels differ from its backdrop)`);
+        const cards = await page.evaluate(() => [...document.querySelectorAll("#lk-list .item")].map((card) => {
+          const canvas = card.querySelector("canvas");
+          const ctx = canvas.getContext("2d");
+          const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const bg = [data[0], data[1], data[2]];
+          let differ = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            if (Math.max(Math.abs(data[i] - bg[0]), Math.abs(data[i + 1] - bg[1]), Math.abs(data[i + 2] - bg[2])) > 30) differ++;
+          }
+          const frame = card.querySelector(".fr polygon + polygon");
+          return { id: card.dataset.equip, painted: canvas.dataset.pic === "1", differ: differ / (width * height), frame: !!frame, rarity: [...card.classList].find((k) => k.startsWith("rar-")) };
+        }));
+        assert.equal(cards.length, count);
+        for (const card of cards) {
+          assert.ok(card.painted, `${card.id}: no picture was drawn`);
+          assert.ok(card.differ >= 0.04, `${card.id}: picture looks blank (${(card.differ * 100).toFixed(1)}% of pixels differ from its backdrop)`);
+          assert.ok(card.frame && card.rarity, `${card.id}: no rarity frame`);
+        }
+        const least = cards.reduce((a, b) => (a.differ < b.differ ? a : b));
+        console.log(`     ${name}: ${cards.length} cards, least busy picture ${least.id} (${(least.differ * 100).toFixed(1)}% of pixels differ from the backdrop)`);
+        await page.evaluate(() => { document.querySelector("#lk-list").scrollTop = 0; });
       }
-      const least = cards.reduce((a, b) => (a.differ < b.differ ? a : b));
-      console.log(`     ${cards.length} cards, least busy picture ${least.id} (${(least.differ * 100).toFixed(1)}% of pixels differ from the backdrop)`);
-      await page.evaluate(() => { document.querySelector("#lk-list").scrollTop = 0; });
+      assert.ok(total >= 13, `${total} cards on the three tabs`);
+      await tab(page, "board");
+    });
+    await ok(`${c.name}: the Shelf tab shows the rank and the cups, and no cards`, async () => {
+      await tab(page, "shelf");
+      const got = await page.evaluate(() => ({ cards: document.querySelectorAll("#lk-list .item").length, text: document.querySelector("#lk-list").innerText, detail: document.querySelector("#lk-detail").hidden }));
+      assert.equal(got.cards, 0);
+      assert.match(got.text, /Your rank/i);
+      assert.equal(got.detail, true, "the detail plate is hidden on the Shelf");
+      await tab(page, "board");
     });
 
     await ok(`${c.name}: the preview renders and the whole surfer is inside the frame`, async () => {
@@ -207,10 +236,18 @@ try {
     });
 
     await ok(`${c.name}: trying on a locked premium card previews it, marks it locked, and equips nothing; an owned card equips and saves`, async () => {
-      const locked = await page.evaluate(() => [...document.querySelectorAll("#lk-list .item[data-locked]")].filter((b) => /Premium/.test(b.innerText)).map((b) => b.dataset.equip));
-      assert.ok(locked.length >= 2, `premium cards: ${locked.join(",")}`);
       const before = await page.evaluate(() => ({ loadout: JSON.stringify(window.__surf.save().loadout), stored: Object.entries(localStorage).map(([k, v]) => k + v).join("|") }));
-      for (const id of locked) {
+      // the disc behind the surfer: only starter gear is worn, so it is Basic's quiet blue
+      assert.equal(await page.evaluate(() => window.__surf.locker().state().disc), "basic");
+      const lockedIds = [];
+      for (const name of ["board", "outfit"]) {
+        await tab(page, name);
+        const ids = await page.evaluate(() => [...document.querySelectorAll("#lk-list .item[data-locked]")].filter((b) => /Premium/.test(b.innerText)).map((b) => b.dataset.equip));
+        for (const id of ids) lockedIds.push([name, id]);
+      }
+      assert.ok(lockedIds.length >= 2, `premium cards: ${lockedIds.join(",")}`);
+      for (const [name, id] of lockedIds) {
+        await tab(page, name);
         await page.evaluate((target) => document.querySelector(`#lk-list [data-equip="${target}"]`).scrollIntoView({ block: "center" }), id);
         await page.click(`#lk-list [data-equip="${id}"]`);
         await frames(page, 6);
@@ -225,11 +262,15 @@ try {
           const dressed = entry.shape
             ? surfer.board.children[0].userData.print
             : Object.values(surfer.active.meshes).map((m) => m.userData.print).find((p) => p && p.c1 === entry.color);
-          return { state, entry, dressed: dressed ? { c1: dressed.c1, pattern: dressed.pattern } : null, loadout: JSON.stringify(S.save().loadout), mode: S.mode() };
+          return { state, entry, dressed: dressed ? { c1: dressed.c1, pattern: dressed.pattern } : null, loadout: JSON.stringify(S.save().loadout), mode: S.mode(), detail: document.querySelector("#lk-detail").innerText, locked: document.querySelector(`#lk-list [data-equip="${target}"]`).classList.contains("sel"), badgeClass: document.querySelector("#lk-badge").className };
         }, id);
         assert.equal(got.state.trying, true, `${id}: not marked as trying on`);
         assert.match(got.state.badge, /LOCKED/, `${id}: badge says ${got.state.badge}`);
         assert.match(got.state.badge, /not equipped/);
+        assert.match(got.detail, /Locked/i, `${id}: the detail plate does not say locked`);
+        assert.match(got.detail, /Preview only/i, `${id}: the detail plate does not say preview only`);
+        assert.ok(got.locked, `${id}: the card on trial is not marked`);
+        assert.equal(got.state.disc, "sig", `${id}: the disc is ${got.state.disc}, a premium piece is Signature`);
         const slot = got.entry.shape ? "board" : "bottom";
         assert.equal(got.state.previewLoadout[slot], id, `${id}: not on the preview`);
         assert.ok(got.dressed && got.dressed.c1 === got.entry.color, `${id}: the surfer is not wearing it (${JSON.stringify(got.dressed)})`);
@@ -237,16 +278,18 @@ try {
         assert.equal(await page.evaluate(() => [...document.querySelectorAll("#lk-list .item.on")].some((b) => b.dataset.locked)), false, `${id}: a locked card shows as equipped`);
       }
       assert.equal(await page.evaluate(() => Object.entries(localStorage).map(([k, v]) => k + v).join("|")), before.stored, "the stored save changed after only trying on locked items");
-      // an owned, unequipped card equips and is saved
-      const owned = await page.evaluate(() => [...document.querySelectorAll("#lk-list .item:not(.on):not([data-locked])")].map((b) => b.dataset.equip).filter((id) => !["male", "female"].includes(id)));
+      // an owned, unequipped card equips and is saved, and the detail plate says equipped
+      await tab(page, "board");
+      const owned = await page.evaluate(() => [...document.querySelectorAll("#lk-list .item:not(.on):not([data-locked])")].map((b) => b.dataset.equip));
       assert.ok(owned.length, "no owned card to equip");
       await page.evaluate((target) => document.querySelector(`#lk-list [data-equip="${target}"]`).scrollIntoView({ block: "center" }), owned[0]);
       await page.click(`#lk-list [data-equip="${owned[0]}"]`);
       await frames(page, 4);
-      const after = await page.evaluate(() => ({ loadout: window.__surf.save().loadout, stored: JSON.parse(localStorage.getItem("endless-swell-save-v2")).loadout, state: window.__surf.locker().state() }));
+      const after = await page.evaluate(() => ({ loadout: window.__surf.save().loadout, stored: JSON.parse(localStorage.getItem("endless-swell-save-v2")).loadout, state: window.__surf.locker().state(), detail: document.querySelector("#lk-detail").innerText }));
       assert.ok(Object.values(after.loadout).includes(owned[0]), `${owned[0]} was not equipped`);
       assert.deepEqual(after.stored, after.loadout, "the equip was not saved");
       assert.equal(after.state.trying, false);
+      assert.match(after.detail, /Equipped/i, "the detail plate does not say equipped");
     });
 
     await ok(`${c.name}: the Locker's skin swatches change the tone, save it, and repaint the preview and the body cards`, async () => {
@@ -254,6 +297,7 @@ try {
       assert.equal(tones.length, 6, `${tones.length} swatches`);
       const current = await page.evaluate(() => window.__surf.save().loadout.skin);
       const next = tones.find((t) => t.toLowerCase() !== current.toLowerCase());
+      await tab(page, "surfer");
       const bodyCardBefore = await page.evaluate(() => document.querySelector('#lk-list [data-equip="male"] canvas').toDataURL());
       await page.click(`#lk-skin [data-skin="${next}"]`);
       await page.waitForFunction(() => window.__surf.locker().pending === 0, { timeout: 60000 });

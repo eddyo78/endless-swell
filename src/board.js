@@ -291,6 +291,16 @@ function buildHull(spec) {
   geo.setAttribute("deckSide", new THREE.Float32BufferAttribute(deckSide, 1));
   geo.setIndex(indices);
   geo.computeVertexNormals();
+  // The end caps meet in a point at the nose and the tail, so their triangles have no area and computeVertexNormals() leaves
+  // their vertices with a zero normal; the shader's normalize() of that is NaN, which the bloom pass spreads over the whole
+  // frame as black (seen from the front, in the title screen's camera). Give those vertices the direction of their end.
+  {
+    const nrm = geo.attributes.normal;
+    const mid = (zMin + zMax) / 2;
+    for (let i = 0; i < nrm.count; i++) {
+      if (Math.hypot(nrm.getX(i), nrm.getY(i), nrm.getZ(i)) < 1e-6) nrm.setXYZ(i, 0, 0, positions[i * 3 + 2] < mid ? -1 : 1);
+    }
+  }
   // The print mask covers this box of the board plan (metres, board space) at this size in pixels (multiples of 4).
   geo.userData.print = {
     xMax,
