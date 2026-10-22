@@ -1,20 +1,59 @@
 {
   "skinTones": [
-    { "id": "deep", "name": "Deep", "color": "#3b2418" },
-    { "id": "brown", "name": "Brown", "color": "#6e3a22" },
-    { "id": "bronze", "name": "Bronze", "color": "#8d5524" },
-    { "id": "tan", "name": "Tan", "color": "#c68642" },
-    { "id": "sand", "name": "Sand", "color": "#e0ac69" },
-    { "id": "light", "name": "Light", "color": "#f1c27d" }
+    {
+      "id": "deep",
+      "name": "Deep",
+      "color": "#3b2418"
+    },
+    {
+      "id": "brown",
+      "name": "Brown",
+      "color": "#6e3a22"
+    },
+    {
+      "id": "bronze",
+      "name": "Bronze",
+      "color": "#8d5524"
+    },
+    {
+      "id": "tan",
+      "name": "Tan",
+      "color": "#c68642"
+    },
+    {
+      "id": "sand",
+      "name": "Sand",
+      "color": "#e0ac69"
+    },
+    {
+      "id": "light",
+      "name": "Light",
+      "color": "#f1c27d"
+    }
   ],
   "bodies": [
-    { "id": "male", "name": "Male", "tier": "earned", "price": 0, "ownedDefault": true },
-    { "id": "female", "name": "Female", "tier": "earned", "price": 0, "ownedDefault": true }
+    {
+      "id": "male",
+      "name": "Male",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "defaultBottom": "trunks-red"
+    },
+    {
+      "id": "female",
+      "name": "Female",
+      "tier": "earned",
+      "price": 0,
+      "ownedDefault": true,
+      "defaultBottom": "bikini-teal"
+    }
   ],
   "outfits": [
     {
       "id": "trunks-red",
       "name": "Classic Red Trunks",
+      "body": "male",
       "slot": "bottom",
       "style": "trunks",
       "tier": "earned",
@@ -27,6 +66,7 @@
     {
       "id": "trunks-navy",
       "name": "Navy Trunks",
+      "body": "male",
       "slot": "bottom",
       "style": "trunks",
       "tier": "earned",
@@ -39,6 +79,7 @@
     {
       "id": "trunks-palm",
       "name": "Palm Trunks",
+      "body": "male",
       "slot": "bottom",
       "style": "trunks",
       "tier": "earned",
@@ -51,6 +92,7 @@
     {
       "id": "trunks-stripe",
       "name": "Rail Stripe Trunks",
+      "body": "male",
       "slot": "bottom",
       "style": "trunks",
       "tier": "earned",
@@ -64,6 +106,7 @@
     {
       "id": "bikini-teal",
       "name": "Teal Bikini",
+      "body": "female",
       "slot": "outfit",
       "style": "bikini",
       "tier": "earned",
@@ -76,6 +119,7 @@
     {
       "id": "bikini-sunset",
       "name": "Sunset Bikini",
+      "body": "female",
       "slot": "outfit",
       "style": "bikini",
       "tier": "earned",
@@ -87,10 +131,12 @@
       "pattern": "stripes"
     },
     {
-      "id": "rash-white",
-      "name": "White Rashguard",
-      "slot": "top",
-      "style": "rash",
+      "id": "rash-white-f",
+      "name": "Women's White Rashguard Set",
+      "body": "female",
+      "family": "rash-white",
+      "slot": "outfit",
+      "style": "rashset",
       "tier": "earned",
       "price": 0,
       "ownedDefault": true,
@@ -99,10 +145,12 @@
       "pattern": "solid"
     },
     {
-      "id": "rash-reef",
-      "name": "Reef Rashguard",
-      "slot": "top",
-      "style": "rash",
+      "id": "rash-reef-f",
+      "name": "Women's Reef Rashguard Set",
+      "body": "female",
+      "family": "rash-reef",
+      "slot": "outfit",
+      "style": "rashset",
       "tier": "earned",
       "price": 0,
       "ownedDefault": false,
@@ -112,22 +160,27 @@
       "pattern": "chevron"
     },
     {
-      "id": "rash-gold",
-      "name": "Gold Rashguard",
-      "slot": "top",
-      "style": "rash",
+      "id": "rash-gold-f",
+      "name": "Women's Gold Rashguard Set",
+      "body": "female",
+      "family": "rash-gold",
+      "slot": "outfit",
+      "style": "rashset",
       "tier": "premium",
       "price": 400,
       "ownedDefault": false,
-      "color": "#e2b657",
-      "color2": "#6a4a12",
-      "pattern": "solid"
+      "color": "#e6b422",
+      "color2": "#0a1330",
+      "pattern": "chevron",
+      "gloss": 0.3
     },
     {
-      "id": "onesie-blue",
-      "name": "Blue Fullsuit",
+      "id": "fullsuit-blue-f",
+      "name": "Women's Blue Fullsuit",
+      "body": "female",
+      "family": "fullsuit-blue",
       "slot": "outfit",
-      "style": "onesie",
+      "style": "fullsuit",
       "tier": "earned",
       "price": 0,
       "ownedDefault": false,
@@ -137,10 +190,12 @@
       "pattern": "panels"
     },
     {
-      "id": "onesie-stealth",
-      "name": "Stealth Spring",
+      "id": "spring-stealth-f",
+      "name": "Women's Stealth Springsuit",
+      "body": "female",
+      "family": "spring-stealth",
       "slot": "outfit",
-      "style": "onesie",
+      "style": "springsuit",
       "tier": "premium",
       "price": 500,
       "ownedDefault": false,
@@ -229,5 +284,12 @@
       "color2": "#2a3340",
       "pattern": "solid"
     }
-  ]
+  ],
+  "legacyIds": {
+    "rash-white": "rash-white",
+    "rash-reef": "rash-reef",
+    "rash-gold": "rash-gold",
+    "onesie-blue": "fullsuit-blue",
+    "onesie-stealth": "spring-stealth"
+  }
 }

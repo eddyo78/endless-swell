@@ -8,6 +8,7 @@ import { Pass, FullScreenQuad } from "three/addons/postprocessing/Pass.js";
 import { skyDome, cloud as cloudShader, waterVertex, waterFragment, oceanVertex, grade } from "./shaders.js";
 import { makeNormalTexture, makeFoamTexture, makeDropTexture } from "./textures.js";
 import { createSurfer } from "./surfer.js";
+import { buildIsland } from "./island.js";
 import { Spray, Wake } from "./particles.js";
 
 export const LOOKS = {
@@ -72,46 +73,6 @@ class GradePass extends Pass {
     this.material.dispose();
     this.fsQuad.dispose();
   }
-}
-
-function buildIsland() {
-  const rand = mulberry(21);
-  const geo = new THREE.PlaneGeometry(9000, 1800, 180, 36);
-  geo.rotateX(-Math.PI / 2);
-  const pos = geo.attributes.position;
-  const peaks = [];
-  for (let i = 0; i < 14; i++) peaks.push([(rand() - 0.5) * 9000 * 0.55, (rand() - 0.5) * 1800 * 0.5, 180 + rand() * 520, 250 + rand() * 500]);
-  const colors = [];
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const z = pos.getZ(i);
-    const nx = x / (9000 * 0.42);
-    const nz = z / (1800 * 0.45);
-    const mask = Math.max(0, 1 - (nx * nx + nz * nz) ** 0.8);
-    let h = 0;
-    for (const [px, pz, ph, pr] of peaks) {
-      const d = Math.hypot(x - px, (z - pz) * 1.4) / pr;
-      h = Math.max(h, ph * Math.exp(-d * d * 1.6));
-    }
-    let f = 0;
-    let a = 1;
-    let freq = 0.004;
-    for (let o = 0; o < 4; o++) {
-      f += a * (1 - Math.abs(Math.sin(x * freq + o * 1.7) * Math.cos(z * freq * 1.3 + o)));
-      a *= 0.5;
-      freq *= 2.1;
-    }
-    h = (h + 140 * mask) * mask + f * 70 * mask;
-    pos.setY(i, h - 20);
-    const k = Math.min(1, h / 500);
-    const jag = 0.5 + 0.5 * Math.sin(x * 0.02 + z * 0.03);
-    colors.push(0.02 + 0.05 * k * jag, 0.1 + 0.18 * k, 0.03 + 0.05 * k * (1 - jag * 0.3));
-  }
-  geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 }));
-  mesh.position.set(-420, 0, 0);
-  return mesh;
 }
 
 function mulberry(seed) {
@@ -334,7 +295,7 @@ export async function createWorld(canvas) {
 
   const clouds = buildClouds(uniforms);
   scene.add(clouds);
-  const island = buildIsland();
+  const island = buildIsland(uniforms);
   scene.add(island);
   const boats = buildBoats();
   scene.add(boats);

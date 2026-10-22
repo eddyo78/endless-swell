@@ -1,0 +1,451 @@
+{
+  "_about": "Everything the tournament structure tunes with: the season length, the difficulty sawtooth, the rule twists, the location calendar, ranking points, rank titles, the placement reward table and the earned-gear generator. Numbers marked placeholder were set from the proposal (_reports/next-phase-proposal.md sections 2 and 3) and have not been tuned against real player scores (m2 measure is open).",
+  "season": {
+    "events": 10
+  },
+  "heat": {
+    "seconds": 42,
+    "waves": 3,
+    "aiSkip": 0.1
+  },
+  "curve": {
+    "_about": "Per season s, g(s) = 1 - 1/(1 + (s-1)/approachK) runs from 0 toward 1 and never reaches it. A season starts at floor + (startLimit-floor)*g, climbs in a straight line over events 1..9 to peakFirst + (peakLimit-peakFirst)*g, and the Finale (event 10) adds the bump on top of the peak. Skill is the rivals' base skill (0..1); feet is the swell.",
+    "approachK": 6,
+    "skill": {
+      "floor": 0.16,
+      "startLimit": 0.5,
+      "peakFirst": 0.55,
+      "peakLimit": 0.72,
+      "finaleBump": 0.03,
+      "rivalCap": 0.75,
+      "rivalJitter": 0.1
+    },
+    "feet": {
+      "floor": 4.0,
+      "startLimit": 9.0,
+      "peakFirst": 10.0,
+      "peakLimit": 14.0,
+      "finaleBump": 0.8,
+      "hardCap": 16.5,
+      "diffSpan": 11
+    }
+  },
+  "hazards": {
+    "_about": "Hazard counts follow the old per-event ramp (sharks from event 3, reef from 2, closeouts from 4, loose boards from 5) for the first rampSeasons seasons, then stay at the level event rampSeasons*10 had.",
+    "rampSeasons": 3
+  },
+  "twists": {
+    "_about": "Rule twists. A season from seasonTwistFrom on carries one season twist, picked in blocks of all six in a seeded order, active every event of the season. eventTwists are the fixed mid-season specials by event number (every season). At most maxActive are ever on at once (a season twist plus one event special).",
+    "seasonTwistFrom": 4,
+    "maxActive": 2,
+    "order": [
+      "two-wave-set",
+      "short-heat",
+      "sideshore-wind",
+      "dry-reef",
+      "spit-double",
+      "priority-strict"
+    ],
+    "eventTwists": {
+      "5": "spit-double",
+      "8": "priority-strict"
+    },
+    "defs": {
+      "spit-double": {
+        "label": "Spit counts double"
+      },
+      "priority-strict": {
+        "label": "Strict priority — interference zeros the wave"
+      },
+      "two-wave-set": {
+        "label": "Two-wave set — only two waves a heat, both count",
+        "waveCap": 2
+      },
+      "short-heat": {
+        "label": "Short heat — 30 seconds on the clock",
+        "heatSeconds": 30,
+        "aiSkip": 0.2
+      },
+      "sideshore-wind": {
+        "label": "Side-shore wind — it shoves you down the face toward the trough",
+        "windPush": -1.2
+      },
+      "dry-reef": {
+        "label": "Dry reef — the rocks bite higher up the face",
+        "reefLift": 0.09,
+        "extraReef": 1
+      }
+    }
+  },
+  "calendar": {
+    "_about": "A season's ten stops, seeded by the season number. The home break is event 1 and the Finale. Premium stops are drawn from the locked-for-sale breaks, never in the first two events and never next to each other. Secondary stops use the other free breaks.",
+    "home": "teahupoo",
+    "premiumStops": 2,
+    "premiumFrom": 3,
+    "premiumTo": 9,
+    "secondaryStops": 3
+  },
+  "points": {
+    "_about": "World Ranking Points by finish (1 = winner, 2 = runner-up, 4 = lost the semifinal, 8 = lost the quarterfinal, 16 = lost the round of 16). Points are never spent. The Finale pays finaleMultiplier. [placeholder]",
+    "byPlace": {
+      "16": 10,
+      "8": 25,
+      "4": 50,
+      "2": 80,
+      "1": 120
+    },
+    "finaleMultiplier": 1.5
+  },
+  "ranks": {
+    "_about": "Named steps with their point floors, then numbered steps forever: past the last name each step is growth times the one before (rounded to 10) and the title is the last name plus a Roman numeral (Legend II, III, ...). [placeholder]",
+    "names": [
+      "Qualifier",
+      "Challenger",
+      "Tour Rookie",
+      "Tour Pro",
+      "Elite",
+      "Champion",
+      "Legend"
+    ],
+    "floors": [
+      0,
+      100,
+      250,
+      500,
+      900,
+      1500,
+      2400
+    ],
+    "growth": 1.6
+  },
+  "rewards": {
+    "_about": "Gear by placement, per season band. A finish gets its floor tier for sure and then rolls each chance, keeping the highest tier that hit. Finishes that yield nothing add one to the pity counter; with pityLimit of them in a row, the next finish gets a common. [placeholder]",
+    "pityLimit": 5,
+    "bands": [
+      {
+        "seasons": [
+          1,
+          1
+        ],
+        "places": {
+          "16": {},
+          "8": {},
+          "4": {
+            "floor": "common"
+          },
+          "2": {
+            "floor": "common",
+            "chances": [
+              {
+                "tier": "rare",
+                "p": 0.3333
+              }
+            ]
+          },
+          "1": {
+            "floor": "rare"
+          }
+        }
+      },
+      {
+        "seasons": [
+          2,
+          4
+        ],
+        "places": {
+          "16": {},
+          "8": {
+            "chances": [
+              {
+                "tier": "common",
+                "p": 0.25
+              }
+            ]
+          },
+          "4": {
+            "floor": "common"
+          },
+          "2": {
+            "floor": "common",
+            "chances": [
+              {
+                "tier": "rare",
+                "p": 0.25
+              }
+            ]
+          },
+          "1": {
+            "floor": "rare",
+            "chances": [
+              {
+                "tier": "epic",
+                "p": 0.2
+              }
+            ]
+          }
+        }
+      },
+      {
+        "seasons": [
+          5,
+          999999
+        ],
+        "places": {
+          "16": {},
+          "8": {
+            "chances": [
+              {
+                "tier": "common",
+                "p": 0.2
+              }
+            ]
+          },
+          "4": {
+            "floor": "common",
+            "chances": [
+              {
+                "tier": "rare",
+                "p": 0.2
+              }
+            ]
+          },
+          "2": {
+            "floor": "rare"
+          },
+          "1": {
+            "floor": "rare",
+            "chances": [
+              {
+                "tier": "epic",
+                "p": 0.333
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "gear": {
+    "_about": "The earned-gear generator: pattern x palette x slot, per body, for the earned line only. Patterns are the basic painted ones (never solid, never an image print); there is no board shape other than the shortboard and no metallic finish here, those stay premium. When every table combination of a tier is owned, palettes are generated from a hue formula, so the supply never ends. Colours are fitted for the renderer by scripts/cloth-calibrate.mjs. Slots: board (both bodies), bottom (male board shorts, female bikini set), set (female rashguard set: rashguard and bottom in one pattern and colour pair), suit (female fullsuit). Men wear no tops and no suits.",
+    "patternNames": {
+      "stripes": "Stripe",
+      "chevron": "Chevron",
+      "panels": "Panel",
+      "sunburst": "Sunburst",
+      "palm": "Palm",
+      "tiger": "Tiger"
+    },
+    "tiers": {
+      "common": {
+        "slots": [
+          "board",
+          "bottom",
+          "set"
+        ],
+        "patterns": [
+          "stripes",
+          "chevron",
+          "panels"
+        ],
+        "palettes": [
+          {
+            "name": "Reef Teal",
+            "c1": "#0f8f8a",
+            "c2": "#f4f1ea"
+          },
+          {
+            "name": "Coral",
+            "c1": "#e8574a",
+            "c2": "#fff1e6"
+          },
+          {
+            "name": "Sandbar",
+            "c1": "#f4ecd8",
+            "c2": "#4a3a24"
+          },
+          {
+            "name": "Lagoon",
+            "c1": "#1f7fbf",
+            "c2": "#e9f6ff"
+          },
+          {
+            "name": "Palm",
+            "c1": "#2a7d4f",
+            "c2": "#f0f7d8"
+          },
+          {
+            "name": "Sunset",
+            "c1": "#f0562c",
+            "c2": "#4a1f3d"
+          },
+          {
+            "name": "Salt",
+            "c1": "#e9eef2",
+            "c2": "#1b3f73"
+          },
+          {
+            "name": "Slate",
+            "c1": "#3b4a57",
+            "c2": "#d6dde3"
+          },
+          {
+            "name": "Mango",
+            "c1": "#f2b632",
+            "c2": "#27323a"
+          },
+          {
+            "name": "Hibiscus",
+            "c1": "#d2386c",
+            "c2": "#ffe3ec"
+          },
+          {
+            "name": "Dusk",
+            "c1": "#5b4aa6",
+            "c2": "#f3d9ff"
+          },
+          {
+            "name": "Driftwood",
+            "c1": "#7d8a8c",
+            "c2": "#f1e6d4"
+          }
+        ],
+        "generated": {
+          "saturation": 0.55,
+          "lightness": 0.45
+        }
+      },
+      "rare": {
+        "slots": [
+          "board",
+          "bottom",
+          "set",
+          "suit"
+        ],
+        "patterns": [
+          "stripes",
+          "chevron",
+          "panels",
+          "sunburst",
+          "palm"
+        ],
+        "palettes": [
+          {
+            "name": "Neon Lime",
+            "c1": "#8fcf4a",
+            "c2": "#13261b"
+          },
+          {
+            "name": "Cyan Burn",
+            "c1": "#4fc6d6",
+            "c2": "#08323f"
+          },
+          {
+            "name": "Magenta Heat",
+            "c1": "#e0328c",
+            "c2": "#2a0b27"
+          },
+          {
+            "name": "Tangerine Teal",
+            "c1": "#ff7a1a",
+            "c2": "#0b6b72"
+          },
+          {
+            "name": "Violet Storm",
+            "c1": "#7a3df0",
+            "c2": "#e4d9ff"
+          },
+          {
+            "name": "Crimson Tide",
+            "c1": "#c8182d",
+            "c2": "#f6e8e2"
+          },
+          {
+            "name": "Seafoam",
+            "c1": "#4fd1a5",
+            "c2": "#0c3a3d"
+          },
+          {
+            "name": "Midnight Sky",
+            "c1": "#17234d",
+            "c2": "#7fc4ff"
+          }
+        ],
+        "generated": {
+          "saturation": 0.75,
+          "lightness": 0.5
+        }
+      },
+      "epic": {
+        "slots": [
+          "board",
+          "bottom",
+          "set",
+          "suit"
+        ],
+        "patterns": [
+          "sunburst",
+          "palm",
+          "tiger"
+        ],
+        "palettes": [
+          {
+            "name": "Lava",
+            "c1": "#ff4a1c",
+            "c2": "#1a0a08"
+          },
+          {
+            "name": "Aurora",
+            "c1": "#2fbfae",
+            "c2": "#2a1466"
+          },
+          {
+            "name": "Void",
+            "c1": "#14101f",
+            "c2": "#ff3d9a"
+          },
+          {
+            "name": "Glacier",
+            "c1": "#dff6ff",
+            "c2": "#1e6fb0"
+          },
+          {
+            "name": "Orchid",
+            "c1": "#c45cf2",
+            "c2": "#201a3a"
+          },
+          {
+            "name": "Ember",
+            "c1": "#1c0a24",
+            "c2": "#ff8a3c"
+          }
+        ],
+        "generated": {
+          "saturation": 0.9,
+          "lightness": 0.5
+        }
+      }
+    },
+    "generatedTrim": [
+      "#f4f1ea",
+      "#1c2430"
+    ],
+    "hueNames": [
+      "Red",
+      "Orange",
+      "Amber",
+      "Lime",
+      "Green",
+      "Teal",
+      "Cyan",
+      "Blue",
+      "Indigo",
+      "Violet",
+      "Magenta",
+      "Rose"
+    ],
+    "kit": {
+      "chance": 0.3,
+      "about": "Chance that a male board-shorts or board win comes as a kit: the other piece in the same pattern and colours is granted with it (never forced; only if not owned yet). Women's gear is always a set: the bikini is top and bottom in one pattern, the rashguard set is rashguard and bottom in one pattern."
+    }
+  }
+}

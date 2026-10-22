@@ -54,9 +54,9 @@
     "hand": "either",
     "kind": "beach",
     "realized": false,
-    "tier": "premium",
-    "price": 400,
-    "ownedDefault": false,
-    "blurb": "Shifting peaks. Profile stub — a softer sand-bottom wave for later."
+    "tier": "earned",
+    "price": 0,
+    "ownedDefault": true,
+    "blurb": "Shifting peaks. Free for everyone (decisions.md, 2026-10-21). Profile stub: not built yet, so its stops are surfed at Teahupo’o until a later milestone builds the soft sand-bottom wave."
   }
 ]

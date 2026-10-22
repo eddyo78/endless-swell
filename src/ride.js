@@ -3,6 +3,7 @@ import {
   clamp,
   closestOnSample,
   extraCloseout,
+  facePoint,
   faceFrame,
   pushOutOfWater,
   sampleProfile,
@@ -234,7 +235,8 @@ export function updateRide(st, dt, input, cond) {
 
     const sMax = Math.min(pre.S * 0.9, THREE.MathUtils.lerp(1.58, 1.1, live.tight));
     const gravPull = (-5.4 * Math.max(preFrame.ty, 0)) / arc;
-    st.vs += (input.steer * 2.7 + gravPull * (1 - stall * 0.65)) * dt;
+    // windPush: the side-shore wind twist shoves the board with a steady push, in steering units (negative: down the face, toward the trough)
+    st.vs += (input.steer * 2.7 + gravPull * (1 - stall * 0.65) + (cond.windPush || 0)) * dt;
     st.vs *= Math.exp(-dt * 3.5);
     st.s += st.vs * dt;
     if (st.s > sMax) {
@@ -306,7 +308,7 @@ export function updateRide(st, dt, input, cond) {
         if (st.mode !== "ride") break;
         const hi = Math.max(reef.z0, reef.z1);
         const lo = Math.min(reef.z0, reef.z1);
-        if (st.z < hi && st.z > lo && st.s < 0.16 + (cond.tide === "low" ? 0.05 : 0)) {
+        if (st.z < hi && st.z > lo && st.s < 0.16 + (cond.tide === "low" ? 0.05 : 0) + (cond.reefLift || 0)) {
           wipe(st, "Reef. Too low on the face.");
         }
       }
@@ -372,6 +374,29 @@ export function autopilot(st, cond) {
   return { steer, thr };
 }
 
+/**
+ * A point on the wave wall `reach` metres up the face from the board, in holder space (x across, y along the
+ * face normal, z along the board), for the rear hand to trail through in the tube.
+ */
+function wallPoint(P, st, fr, reach) {
+  const p0 = facePoint(P, st.s);
+  const sMax = P.S * 0.98;
+  let ds = reach / Math.max(P.r0, 0.45);
+  for (let k = 0; k < 3; k++) {
+    const p1 = facePoint(P, Math.min(sMax, st.s + ds));
+    const dist = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+    if (dist < 1e-4) break;
+    ds *= reach / dist;
+  }
+  const p = facePoint(P, Math.min(sMax, st.s + ds));
+  const vx = p[0] - st.pos.x;
+  const vy = p[1] - st.pos.y;
+  const x = vx * st.lateral.x + vy * st.lateral.y;
+  const y = vx * st.normal.x + vy * st.normal.y;
+  // fr.x/fr.y is the board's own face point; the holder sits 0.02 above it
+  return { x, y: y + 0.03, z: 0.05 };
+}
+
 export function syncWorld(world, st, dt, input, cond) {
   const live = st.live;
   const extra = extraCloseout(st.z, live.zones);
@@ -398,14 +423,14 @@ export function syncWorld(world, st, dt, input, cond) {
     holder.rotateZ(e * 2.1);
     holder.rotateX(e * 1.1);
   }
-  world.surfer.body.rotation.z = Math.atan2(-st.lateral.y, st.normal.y) * 0.55;
-  world.surfer.yaw.rotation.z = -st.vs * 0.12;
-
   const weights = { crouch: 0, glide: 0, claim: 0, wipe: 0 };
   if (st.mode === "wipe") weights.wipe = 1;
   else if (st.mode === "claim" && st.t - st.claim > 0.35) weights.claim = 1;
   else {
-    const crouch = clamp(0.34 + (st.inTube ? 0.5 : 0) + Math.max(input.thr, 0) * 0.28, 0, 1);
+    // paddle-in / menu: relaxed and upright; the first 1.4 s of a ride: the drop, deep crouch easing out; tube: low
+    const upright = st.mode === "menu" ? 0.2 : 0;
+    const drop = st.mode === "ride" ? clamp(1 - st.t / 1.4, 0, 1) : 0;
+    const crouch = clamp(0.34 - upright + drop * 0.45 + (st.inTube ? 0.5 : 0) + Math.max(input.thr, 0) * 0.28, 0, 1);
     weights.crouch = crouch;
     weights.glide = 1 - crouch;
   }
@@ -418,6 +443,11 @@ export function syncWorld(world, st, dt, input, cond) {
     thr: input.thr,
     inTube: st.inTube,
     deep: st.deep,
+    dt,
+    vs: st.vs,
+    snap,
+    tilt: Math.atan2(-st.lateral.y, st.normal.y) * 0.55,
+    wall: st.inTube ? wallPoint(P, st, fr, 0.62) : null,
   });
 
   const aspect = world.camera.aspect;

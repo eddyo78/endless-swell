@@ -1,450 +1,110 @@
-// Builds athletic male and female surfers from the MakeHuman CC0 base mesh,
-// default skeleton, and macro targets. Output is embedded for the single-file build.
-// Source and license: see ASSETS.md.
+// Builds the male and female surfers from MakeHuman CC0 assets and writes src/assets/surfers.data.js
+// (two glTF binaries, base64, plus the textures as data URIs, so the single-file build stays self-contained).
+//
+//   node scripts/build-surfers.mjs [--male-hair short04] [--female-hair ponytail01] [--quiet]
+//
+// Sources (all CC0 1.0, listed with URLs in ASSETS.md):
+//   GitHub makehumancommunity/makehuman, makehuman/data: 3dobjs/base.obj (mesh + UVs), rigs/default.mhskel and
+//     rigs/default_weights.mhw (skeleton, skin weights), targets/macrodetails/* (body shape).
+//   makehuman_system_assets_cc0.zip (read with HTTP Range requests, only the entries below are fetched):
+//     skins/*   diffuse maps          hair/*     hair meshes (.mhclo + .obj + diffuse png with alpha)
+//     eyes/*    eye meshes + iris map  eyebrows/* and eyelashes/*  meshes + alpha pngs
+//
+// MakeHuman file formats (read from the files themselves; the full description is at the top of scripts/lib/mh.mjs):
+//   .obj    `v` positions in decimeters, `vt` texture coordinates (origin bottom left), `g` groups, faces `f v/vt ...`.
+//           The exporter splits a vertex wherever its (v, vt) pair differs, so seams get one vertex per UV, and writes
+//           TEXCOORD_0 with v flipped to the glTF convention (origin top left).
+//   .mhclo  hair, eyebrows, eyelashes, eyes, clothes: `obj_file`, `material`, `x_scale/y_scale/z_scale a b d` and, after
+//           `verts 0`, one line per proxy vertex: `a b c wa wb wc ox oy oz` (position = weighted sum of three base-mesh
+//           vertices + offset scaled by |base[a]-base[b]|/d on that axis) or a single index (a direct base vertex).
+//   .mhmat  `diffuseTexture`, `transparent`, colours; only the texture name and transparency are read.
+//   .mhskel/.mhw  JSON: bones with head/tail joints and parents; per-bone [vertex, weight] lists.
+// Everything fetched is cached under build/.cache/ (gitignored).
+//
+// What is made here (not downloaded): the clothing. MakeHuman's CC0 packs hold no swimwear (the 20 clothes are
+// shoes, a hat and casual/work/elegant/sport suits), so trunks, bikini, rashguards, full and spring suits are cut from
+// the body surface by scripts/lib/garments.mjs and share the body's skin weights.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { blendInfluence, influencesFrom, jointMap, shapeBody } from "./lib/character.mjs";
+import { RACE, SHAPES } from "./lib/bodyspec.mjs";
+import { tintHair } from "./lib/haircolour.mjs";
+import { formatMeasure, measureBody } from "./lib/measure.mjs";
+import * as G from "./lib/garments.mjs";
+import { bleedColour, decodePng, encodeAlphaPng, encodeJpeg, meanNormalise, opaque, resize } from "./lib/image.mjs";
+import { computeNormals, flipWinding, hemReport, makeSurface, surfaceFromBase, triCount, windsOutward } from "./lib/mesh.mjs";
+import { cavityColors, darkenScalp, scalpMask } from "./lib/skinbake.mjs";
+import { fitProxy, parseMhclo, parseMhmat, parseObj, triangulate } from "./lib/mh.mjs";
+import { SYSTEM_ASSETS_ZIP, githubText, openRemoteZip } from "./lib/remote.mjs";
 
-const ROOT = "https://raw.githubusercontent.com/makehumancommunity/makehuman/master/makehuman/data";
 const here = dirname(fileURLToPath(import.meta.url));
 const outFile = join(here, "../src/assets/surfers.data.js");
+const argv = process.argv.slice(2);
+const opt = (name, fallback) => {
+  const i = argv.indexOf(`--${name}`);
+  return i >= 0 ? argv[i + 1] : fallback;
+};
+const quiet = argv.includes("--quiet");
 
-const KEEP_GROUPS = new Set([
-  "body",
-  "helper-l-eye",
-  "helper-r-eye",
-  "helper-upper-teeth",
-  "helper-lower-teeth",
-  "helper-l-eyelashes-1",
-  "helper-l-eyelashes-2",
-  "helper-r-eyelashes-1",
-  "helper-r-eyelashes-2",
-]);
+const log = (...a) => {
+  if (!quiet) console.log(...a);
+};
 
-async function text(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.text();
+// Per body: macro shape, the chosen CC0 assets, and the licence record the report and ASSETS.md quote.
+const KINDS = {
+  male: {
+    shape: SHAPES.male,
+    hair: opt("male-hair", "short04"),
+    // sun-bleached dark blond over brown: shadow, light and bleach colours (sRGB) for lib/haircolour.mjs
+    scalpFloor: 0.45,
+    hairColour: { shade: [52, 34, 20], light: [128, 92, 52], bleach: [182, 144, 90], streakAmount: 0.6, streakScale: 38, seed: 11 },
+    brows: "eyebrow008",
+    lashes: "eyelashes01",
+    skins: {
+      light: "skins/young_caucasian_male/young_lightskinned_male_diffuse.png",
+      dark: "skins/young_african_male/young_darkskinned_male_diffuse.png",
+    },
+  },
+  female: {
+    shape: SHAPES.female,
+    hair: opt("female-hair", "ponytail01"),
+    // brown with sun streaks
+    scalpFloor: 0.38,
+    hairColour: { shade: [44, 28, 20], light: [124, 82, 52], bleach: [196, 144, 84], streakAmount: 0.5, streakScale: 46, seed: 23 },
+    brows: "eyebrow001",
+    lashes: "eyelashes02",
+    skins: {
+      light: "skins/young_caucasian_female/young_lightskinned_female_diffuse.png",
+      dark: "skins/young_african_female/young_darkskinned_female_diffuse.png",
+    },
+  },
+};
+const EYE = { mesh: "eyes/high-poly/high-poly", material: "eyes/materials/brown.mhmat" };
+const TEX = { skin: 2048, hair: 1024, eye: 512, brows: 512, lashes: 512 };
+// skin under opaque hair is darkened to a fraction (the hair-root shade, whatever the tone); the fraction is per body because it
+// has to suit the hair colour: black hair wants a deep root shade, the blond male's wants a light one
+const SKIN_LEVEL = 0.6; // the skin detail map's mean sits at 60% grey; the material colour multiplies by 1/0.6
+
+const used = []; // licence record: { file, url, licence }
+const zip = await openRemoteZip(SYSTEM_ASSETS_ZIP);
+const packMeta = JSON.parse((await zip.read("packs/makehuman_system_assets.json")).toString());
+async function asset(name) {
+  const key = name.split("/").pop().replace(/\.[a-z]+$/, "");
+  used.push({ file: name, url: `${SYSTEM_ASSETS_ZIP} -> ${name}`, key });
+  return zip.read(name);
+}
+function licenceOf(item) {
+  const m = packMeta[item];
+  if (!m) throw new Error(`${item} is not in packs/makehuman_system_assets.json`);
+  if (m.license !== "CC0") throw new Error(`${item} is ${m.license}, not CC0; refusing to use it`);
+  return m.license;
 }
 
-function parseObj(src) {
-  const verts = [];
-  const faces = [];
-  let group = "";
-  for (const line of src.split("\n")) {
-    if (line.startsWith("v ")) {
-      const p = line.trim().split(/\s+/);
-      verts.push(+p[1], +p[2], +p[3]);
-      continue;
-    }
-    if (line.startsWith("g ") || line.startsWith("o ")) {
-      group = line.slice(2).trim();
-      continue;
-    }
-    if (line.startsWith("f ") && KEEP_GROUPS.has(group)) {
-      const idx = line.trim().split(/\s+/).slice(1).map((tok) => parseInt(tok, 10) - 1);
-      for (let i = 1; i < idx.length - 1; i++) faces.push(group, idx[0], idx[i], idx[i + 1]);
-    }
-  }
-  return { verts: Float64Array.from(verts), faces };
-}
+// ---------------------------------------------------------------------------------------------------------------
+// bones
 
-function parseTarget(src) {
-  const out = [];
-  for (const line of src.split("\n")) {
-    if (!line || line[0] === "#") continue;
-    const p = line.trim().split(/\s+/);
-    if (p.length < 4) continue;
-    out.push([+p[0], +p[1], +p[2], +p[3]]);
-  }
-  return out;
-}
-
-function applyTarget(verts, target, weight) {
-  if (weight < 1e-4) return;
-  for (const [i, x, y, z] of target) {
-    const o = i * 3;
-    verts[o] += x * weight;
-    verts[o + 1] += y * weight;
-    verts[o + 2] += z * weight;
-  }
-}
-
-function muscleWeight(level) {
-  const maxmuscle = Math.max(0, level * 2 - 1);
-  const minmuscle = Math.max(0, 1 - level * 2);
-  return { maxmuscle, minmuscle, averagemuscle: 1 - (maxmuscle + minmuscle) };
-}
-
-function fatWeight(level) {
-  const maxweight = Math.max(0, level * 2 - 1);
-  const minweight = Math.max(0, 1 - level * 2);
-  return { maxweight, minweight, averageweight: 1 - (maxweight + minweight) };
-}
-
-async function loadMacro(gender, muscle, weight, race) {
-  const mw = muscleWeight(muscle);
-  const fw = fatWeight(weight);
-  const jobs = [];
-  for (const muscleName of ["maxmuscle", "averagemuscle", "minmuscle"]) {
-    for (const weightName of ["minweight", "averageweight", "maxweight"]) {
-      const w = mw[muscleName] * fw[weightName];
-      if (w < 1e-4) continue;
-      const file = `universal-${gender}-young-${muscleName}-${weightName}.target`;
-      jobs.push([`${ROOT}/targets/macrodetails/${file}`, w]);
-    }
-  }
-  for (const [raceName, rw] of Object.entries(race)) {
-    if (rw < 1e-4) continue;
-    const file = `${raceName}-${gender}-young.target`;
-    jobs.push([`${ROOT}/targets/macrodetails/${file}`, rw]);
-  }
-  const targets = await Promise.all(jobs.map(async ([url, w]) => [await text(url).then(parseTarget), w]));
-  return targets;
-}
-
-function influencesFrom(weightJson, vertCount) {
-  const data = JSON.parse(weightJson);
-  const lists = Array.from({ length: vertCount }, () => []);
-  for (const [bone, pairs] of Object.entries(data.weights)) {
-    for (const [idx, w] of pairs) lists[idx].push([bone, w]);
-  }
-  for (const list of lists) {
-    list.sort((a, b) => b[1] - a[1]);
-    if (list.length > 4) list.length = 4;
-    let sum = 0;
-    for (const item of list) sum += item[1];
-    if (sum <= 1e-8) {
-      list.length = 0;
-      list.push(["root", 1]);
-      continue;
-    }
-    for (const item of list) item[1] /= sum;
-  }
-  return lists;
-}
-
-function faceList(faces, groupName) {
-  const tris = [];
-  for (let i = 0; i < faces.length; i += 4) {
-    if (groupName && faces[i] !== groupName) continue;
-    if (!groupName && faces[i] !== "body") continue;
-    tris.push(faces[i + 1], faces[i + 2], faces[i + 3]);
-  }
-  return tris;
-}
-
-function groups(faces, names) {
-  const tris = [];
-  const set = new Set(names);
-  for (let i = 0; i < faces.length; i += 4) {
-    if (!set.has(faces[i])) continue;
-    tris.push(faces[i + 1], faces[i + 2], faces[i + 3]);
-  }
-  return tris;
-}
-
-function normalsFor(verts, tris) {
-  const n = new Float32Array(verts.length);
-  for (let i = 0; i < tris.length; i += 3) {
-    const a = tris[i] * 3;
-    const b = tris[i + 1] * 3;
-    const c = tris[i + 2] * 3;
-    const ax = verts[b] - verts[a];
-    const ay = verts[b + 1] - verts[a + 1];
-    const az = verts[b + 2] - verts[a + 2];
-    const bx = verts[c] - verts[a];
-    const by = verts[c + 1] - verts[a + 1];
-    const bz = verts[c + 2] - verts[a + 2];
-    const nx = ay * bz - az * by;
-    const ny = az * bx - ax * bz;
-    const nz = ax * by - ay * bx;
-    for (const vi of [tris[i], tris[i + 1], tris[i + 2]]) {
-      n[vi * 3] += nx;
-      n[vi * 3 + 1] += ny;
-      n[vi * 3 + 2] += nz;
-    }
-  }
-  return n;
-}
-
-function outward(verts, tris) {
-  let sx = 0;
-  let sy = 0;
-  let sz = 0;
-  let c = 0;
-  for (let i = 0; i < tris.length; i += 30) {
-    const vi = tris[i];
-    sx += verts[vi * 3];
-    sy += verts[vi * 3 + 1];
-    sz += verts[vi * 3 + 2];
-    c++;
-  }
-  sx /= c;
-  sy /= c;
-  sz /= c;
-  let dot = 0;
-  for (let i = 0; i < tris.length; i += 90) {
-    const a = tris[i] * 3;
-    const b = tris[i + 1] * 3;
-    const d = tris[i + 2] * 3;
-    const ax = verts[b] - verts[a];
-    const ay = verts[b + 1] - verts[a + 1];
-    const az = verts[b + 2] - verts[a + 2];
-    const bx = verts[d] - verts[a];
-    const by = verts[d + 1] - verts[a + 1];
-    const bz = verts[d + 2] - verts[a + 2];
-    const nx = ay * bz - az * by;
-    const ny = az * bx - ax * bz;
-    const nz = ax * by - ay * bx;
-    dot += nx * (verts[a] - sx) + ny * (verts[a + 1] - sy) + nz * (verts[a + 2] - sz);
-  }
-  return dot >= 0;
-}
-
-function jointMap(skel, verts) {
-  const out = {};
-  for (const [name, ids] of Object.entries(skel.joints)) {
-    let x = 0;
-    let y = 0;
-    let z = 0;
-    for (const id of ids) {
-      x += verts[id * 3];
-      y += verts[id * 3 + 1];
-      z += verts[id * 3 + 2];
-    }
-    const n = ids.length || 1;
-    out[name] = [x / n, y / n, z / n];
-  }
-  return out;
-}
-
-function weightOn(list, names) {
-  let s = 0;
-  for (const [bone, w] of list) if (names.has(bone)) s += w;
-  return s;
-}
-
-function buildClothes(verts, bodyTris, infl, joints) {
-  const hip = joints["upperleg01.L____head"][1];
-  const knee = joints["lowerleg01.L____head"][1];
-  const neck = joints["neck01____head"][1];
-  const shoulder = joints["shoulder01.L____head"][1];
-  const LEG = new Set(["upperleg01.L", "upperleg02.L", "upperleg01.R", "upperleg02.R", "pelvis.L", "pelvis.R", "root"]);
-  const SHIN = new Set(["lowerleg01.L", "lowerleg02.L", "lowerleg01.R", "lowerleg02.R", "foot.L", "foot.R"]);
-  const BREAST = new Set(["breast.L", "breast.R"]);
-  const TORSO = new Set(["spine01", "spine02", "spine03", "spine04", "spine05", "clavicle.L", "clavicle.R", "shoulder01.L", "shoulder01.R", "breast.L", "breast.R"]);
-  const ARM = new Set(["upperarm01.L", "upperarm02.L", "upperarm01.R", "upperarm02.R", "lowerarm01.L", "lowerarm02.L", "lowerarm01.R", "lowerarm02.R"]);
-  const HEAD = new Set(["head", "neck01", "neck02", "neck03"]);
-  const HAND = new Set(["wrist.L", "wrist.R"]);
-  const FOOT = new Set(["foot.L", "foot.R"]);
-  for (const [name] of Object.entries(joints)) {
-    if (name.startsWith("finger")) HAND.add(name.split("____")[0]);
-    if (name.startsWith("toe")) FOOT.add(name.split("____")[0]);
-  }
-  const pick = { trunks: [], bikiniBottom: [], bikiniTop: [], rash: [], onesie: [], hair: [] };
-  const tmp = [0, 0, 0];
-  for (let i = 0; i < bodyTris.length; i += 3) {
-    const ids = [bodyTris[i], bodyTris[i + 1], bodyTris[i + 2]];
-    tmp[0] = tmp[1] = tmp[2] = 0;
-    let leg = 0;
-    let shin = 0;
-    let breast = 0;
-    let torso = 0;
-    let arm = 0;
-    let head = 0;
-    let hand = 0;
-    let foot = 0;
-    for (const id of ids) {
-      tmp[0] += verts[id * 3];
-      tmp[1] += verts[id * 3 + 1];
-      tmp[2] += verts[id * 3 + 2];
-      const list = infl[id];
-      leg += weightOn(list, LEG);
-      shin += weightOn(list, SHIN);
-      breast += weightOn(list, BREAST);
-      torso += weightOn(list, TORSO);
-      arm += weightOn(list, ARM);
-      head += weightOn(list, HEAD);
-      hand += weightOn(list, HAND);
-      foot += weightOn(list, FOOT);
-    }
-    const y = tmp[1] / 3;
-    const z = tmp[2] / 3;
-    leg /= 3;
-    shin /= 3;
-    breast /= 3;
-    torso /= 3;
-    arm /= 3;
-    head /= 3;
-    hand /= 3;
-    foot /= 3;
-    const aboveKnee = y > knee + 0.04 && y < hip + 0.06;
-    if (aboveKnee && leg > 0.4 && shin < 0.35 && head < 0.02 && arm < 0.05) pick.trunks.push(...ids);
-    if (y > knee + (hip - knee) * 0.58 && y < hip + 0.015 && leg > 0.4 && shin < 0.15 && head < 0.02) pick.bikiniBottom.push(...ids);
-    const chestLow = hip + Math.max(0.16, (shoulder - hip) * 0.42);
-    const chestHigh = shoulder - 0.06;
-    if (z > 0.025 && y > chestLow && y < chestHigh && head < 0.04 && arm < 0.15 && (breast > 0.1 || torso > 0.5)) {
-      pick.bikiniTop.push(...ids);
-    }
-    if ((torso > 0.4 || arm > 0.5) && head < 0.05 && hand < 0.2 && y < neck - 0.02 && y > hip - 0.02) {
-      pick.rash.push(...ids);
-    }
-    if (head < 0.04 && hand < 0.18 && foot < 0.12 && y < neck - 0.02 && y > -0.72) pick.onesie.push(...ids);
-  }
-  return pick;
-}
-
-function hairTris(verts, bodyTris, infl, normals) {
-  const tris = [];
-  for (let i = 0; i < bodyTris.length; i += 3) {
-    const ids = [bodyTris[i], bodyTris[i + 1], bodyTris[i + 2]];
-    let ok = 0;
-    for (const id of ids) {
-      const list = infl[id];
-      let head = 0;
-      for (const [bone, w] of list) if (bone === "head") head += w;
-      const nz = normals[id * 3 + 2];
-      const ny = normals[id * 3 + 1];
-      if (head > 0.62 && nz < 0.35 && ny > -0.15) ok++;
-    }
-    if (ok === 3) tris.push(...ids);
-  }
-  return tris;
-}
-
-function shell(verts, tris, normals, amount) {
-  const v = new Float64Array(verts);
-  const seen = new Set(tris);
-  for (const id of seen) {
-    let nx = normals[id * 3];
-    let ny = normals[id * 3 + 1];
-    let nz = normals[id * 3 + 2];
-    const len = Math.hypot(nx, ny, nz) || 1;
-    v[id * 3] += (nx / len) * amount;
-    v[id * 3 + 1] += (ny / len) * amount;
-    v[id * 3 + 2] += (nz / len) * amount;
-  }
-  return { verts: v, tris };
-}
-
-function ponytail(joints) {
-  const head = joints["head____head"];
-  const tail = joints["head____tail"];
-  const ax = head[0];
-  const ay = (head[1] + tail[1]) * 0.5;
-  const az = Math.min(head[2], tail[2]) - 0.04;
-  const positions = [];
-  const indices = [];
-  const rings = 7;
-  const segs = 8;
-  for (let i = 0; i <= rings; i++) {
-    const t = i / rings;
-    const y = ay - t * 0.05 - t * t * 0.16;
-    const z = az - 0.03 - t * 0.05;
-    const r = 0.034 * (1 - t * 0.72);
-    for (let j = 0; j < segs; j++) {
-      const a = (j / segs) * Math.PI * 2;
-      positions.push(ax + Math.cos(a) * r, y, z + Math.sin(a) * r * 0.8);
-    }
-  }
-  for (let i = 0; i < rings; i++) {
-    for (let j = 0; j < segs; j++) {
-      const a = i * segs + j;
-      const b = i * segs + ((j + 1) % segs);
-      indices.push(a, b, a + segs, b, b + segs, a + segs);
-    }
-  }
-  const normals = new Float32Array(positions.length);
-  for (let i = 0; i < indices.length; i += 3) {
-    const a = indices[i] * 3;
-    const b = indices[i + 1] * 3;
-    const c = indices[i + 2] * 3;
-    const ax = positions[b] - positions[a];
-    const ay = positions[b + 1] - positions[a + 1];
-    const az = positions[b + 2] - positions[a + 2];
-    const bx = positions[c] - positions[a];
-    const by = positions[c + 1] - positions[a + 1];
-    const bz = positions[c + 2] - positions[a + 2];
-    const nx = ay * bz - az * by;
-    const ny = az * bx - ax * bz;
-    const nz = ax * by - ay * bx;
-    for (const o of [a, b, c]) {
-      normals[o] += nx;
-      normals[o + 1] += ny;
-      normals[o + 2] += nz;
-    }
-  }
-  return { positions, indices, normals };
-}
-
-function compact(srcVerts, tris, normals, infl, boneIndex) {
-  const map = new Map();
-  const pos = [];
-  const nrm = [];
-  const joints = [];
-  const weights = [];
-  const idx = [];
-  for (const vi of tris) {
-    let ni = map.get(vi);
-    if (ni === undefined) {
-      ni = map.size;
-      map.set(vi, ni);
-      pos.push(srcVerts[vi * 3], srcVerts[vi * 3 + 1], srcVerts[vi * 3 + 2]);
-      let nx = normals[vi * 3] || 0;
-      let ny = normals[vi * 3 + 1] || 1;
-      let nz = normals[vi * 3 + 2] || 0;
-      const len = Math.hypot(nx, ny, nz) || 1;
-      nrm.push(nx / len, ny / len, nz / len);
-      const list = infl[vi] || [["root", 1]];
-      const j = [0, 0, 0, 0];
-      const w = [0, 0, 0, 0];
-      for (let k = 0; k < 4; k++) {
-        if (!list[k]) break;
-        j[k] = boneIndex.get(list[k][0]) ?? 0;
-        w[k] = list[k][1];
-      }
-      joints.push(...j);
-      weights.push(...w);
-    }
-    idx.push(ni);
-  }
-  return { pos, nrm, joints, weights, idx };
-}
-
-function meshFrom(name, packed) {
-  return { name, ...packed };
-}
-
-function scaleAll(verts, s) {
-  for (let i = 0; i < verts.length; i++) verts[i] *= s;
-}
-
-function buildCharacter(kind, baseVerts, faces, infl, skel, targets) {
-  const verts = Float64Array.from(baseVerts);
-  for (const [target, w] of targets) applyTarget(verts, target, w);
-  scaleAll(verts, 0.1);
-  const bodyTris = faceList(faces, "body");
-  if (!outward(verts, bodyTris)) {
-    for (let i = 0; i < bodyTris.length; i += 3) {
-      const t = bodyTris[i + 1];
-      bodyTris[i + 1] = bodyTris[i + 2];
-      bodyTris[i + 2] = t;
-    }
-  }
-  const normals = normalsFor(verts, bodyTris);
-  const joints = jointMap(skel, verts);
-  for (const key of Object.keys(joints)) {
-    joints[key][0] *= 1;
-  }
-  const clothes = buildClothes(verts, bodyTris, infl, joints);
-  const hair = hairTris(verts, bodyTris, infl, normals);
-  const eyes = groups(faces, ["helper-l-eye", "helper-r-eye"]);
-  const lashes = groups(faces, ["helper-l-eyelashes-1", "helper-l-eyelashes-2", "helper-r-eyelashes-1", "helper-r-eyelashes-2"]);
-  const teeth = groups(faces, ["helper-upper-teeth", "helper-lower-teeth"]);
-  const allNorm = normalsFor(verts, bodyTris.concat(eyes, lashes, teeth));
-  for (let i = 0; i < allNorm.length; i++) if (!allNorm[i] && normals[i]) allNorm[i] = normals[i];
-
+function boneOrder(skel) {
   const bones = [];
   const byName = skel.bones;
   const pending = Object.keys(byName);
@@ -462,73 +122,122 @@ function buildCharacter(kind, baseVerts, faces, infl, skel, targets) {
     }
     if (!moved) throw new Error("bone cycle");
   }
-  const boneIndex = new Map(bones.map((name, i) => [name, i]));
-  const boneLocals = bones.map((name) => {
-    const spec = byName[name];
-    const head = joints[spec.head];
-    const parent = spec.parent ? joints[byName[spec.parent].head] : [0, 0, 0];
-    return [head[0] - parent[0], head[1] - parent[1], head[2] - parent[2]];
-  });
+  return bones;
+}
 
-  const pack = (name, vts, tris, inflate) => {
-    const src = inflate ? shell(vts, tris, allNorm, inflate).verts : vts;
-    return meshFrom(name, compact(src, tris, allNorm, infl, boneIndex));
-  };
-  const meshes = [
-    pack("body", verts, bodyTris, 0),
-    pack("eyes", verts, eyes, 0),
-    pack("lashes", verts, lashes, 0.001),
-    pack("teeth", verts, teeth, 0),
-    pack("hair", verts, hair, kind === "female" ? 0.01 : 0.014),
-    pack("trunks", verts, clothes.trunks, 0.007),
-    pack("bikiniBottom", verts, clothes.bikiniBottom, 0.006),
-    pack("bikiniTop", verts, clothes.bikiniTop, 0.005),
-    pack("rash", verts, clothes.rash, 0.006),
-    pack("onesie", verts, clothes.onesie, 0.007),
-  ];
-  if (kind === "female") {
-    const pony = ponytail(joints);
-    const lists = [];
-    for (let i = 0; i < pony.positions.length / 3; i++) lists.push([["head", 1]]);
-    meshes.push(meshFrom("ponytail", compact(Float64Array.from(pony.positions), pony.indices, pony.normals, lists, boneIndex)));
+// ---------------------------------------------------------------------------------------------------------------
+// proxies (hair, eyes, brows, lashes): fitted to the shaped body
+
+// keepFace(cornersUv) can drop faces; used to remove the eye proxy's transparent cornea shell.
+async function proxySurface(path, vertsDm, infl, forceBone, keepFace = () => true) {
+  const clo = parseMhclo((await asset(`${path}.mhclo`)).toString());
+  const obj = parseObj((await asset(`${path}.obj`)).toString());
+  const fitted = fitProxy(clo, vertsDm);
+  const meters = fitted.map((v) => v * 0.1);
+  const faces = [...obj.groups.values()].flat().filter((f) => keepFace(f.map(([, t]) => [obj.uvs[t * 2], obj.uvs[t * 2 + 1]])));
+  const { tv, tt } = triangulate(faces);
+  const lists = clo.fit.map((f) => (forceBone ? [[forceBone, 1]] : blendInfluence(infl, f.v, f.w)));
+  const s = surfaceFromBase(meters, obj.uvs, lists, tv, tt);
+  return { s, clo, obj };
+}
+
+// Hair: normals point away from the middle of the head, blended with the card's own normal, so a cap of flat cards
+// shades like one rounded mass of hair.
+function hairNormals(s, centre, weightRadial) {
+  const geo = computeNormals(s);
+  const N = new Float64Array(s.n * 3);
+  for (let i = 0; i < s.n; i++) {
+    let rx = s.P[i * 3] - centre[0];
+    let ry = s.P[i * 3 + 1] - centre[1];
+    let rz = s.P[i * 3 + 2] - centre[2];
+    const rl = Math.hypot(rx, ry, rz) || 1;
+    rx /= rl;
+    ry /= rl;
+    rz /= rl;
+    let gx = geo[i * 3];
+    let gy = geo[i * 3 + 1];
+    let gz = geo[i * 3 + 2];
+    if (gx * rx + gy * ry + gz * rz < 0) {
+      gx = -gx;
+      gy = -gy;
+      gz = -gz;
+    }
+    const x = gx * (1 - weightRadial) + rx * weightRadial;
+    const y = gy * (1 - weightRadial) + ry * weightRadial;
+    const z = gz * (1 - weightRadial) + rz * weightRadial;
+    const l = Math.hypot(x, y, z) || 1;
+    N[i * 3] = x / l;
+    N[i * 3 + 1] = y / l;
+    N[i * 3 + 2] = z / l;
   }
-  let minY = Infinity;
-  for (const id of bodyTris) minY = Math.min(minY, verts[id * 3 + 1]);
-  console.log(kind, "body verts", meshes[0].pos.length / 3, "tris", meshes[0].idx.length / 3, "minY", minY.toFixed(3), "hip", joints["upperleg01.L____head"].map((n) => n.toFixed(3)).join(","));
-  return { bones, boneLocals, parent: bones.map((name) => byName[name].parent), meshes, minY };
+  return N;
 }
 
-function pad4(buf) {
-  const n = (4 - (buf.length % 4)) % 4;
-  if (!n) return buf;
-  return Buffer.concat([buf, Buffer.alloc(n)]);
+// ---------------------------------------------------------------------------------------------------------------
+// textures
+
+// Coverage mask of the UV triangles of the reference skin (torso, arms, legs; not head, hands, feet).
+function uvMask(surface, size, triOk) {
+  const mask = new Uint8Array(size * size);
+  for (let t = 0; t < surface.T.length / 3; t++) {
+    if (!triOk(t)) continue;
+    const pts = [0, 1, 2].map((k) => {
+      const v = surface.T[t * 3 + k];
+      return [surface.UV[v * 2] * size, (1 - surface.UV[v * 2 + 1]) * size];
+    });
+    const minX = Math.max(0, Math.floor(Math.min(...pts.map((p) => p[0]))));
+    const maxX = Math.min(size - 1, Math.ceil(Math.max(...pts.map((p) => p[0]))));
+    const minY = Math.max(0, Math.floor(Math.min(...pts.map((p) => p[1]))));
+    const maxY = Math.min(size - 1, Math.ceil(Math.max(...pts.map((p) => p[1]))));
+    const [a, b, c] = pts;
+    const den = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+    if (Math.abs(den) < 1e-9) continue;
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const px = x + 0.5;
+        const py = y + 0.5;
+        const l1 = ((b[1] - c[1]) * (px - c[0]) + (c[0] - b[0]) * (py - c[1])) / den;
+        const l2 = ((c[1] - a[1]) * (px - c[0]) + (a[0] - c[0]) * (py - c[1])) / den;
+        if (l1 >= 0 && l2 >= 0 && l1 + l2 <= 1) mask[y * size + x] = 1;
+      }
+    }
+  }
+  return mask;
 }
+
+const uri = (buf, mime) => `data:${mime};base64,${buf.toString("base64")}`;
+const sizes = [];
+function record(label, buf) {
+  sizes.push([label, buf.length]);
+  return buf;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// glTF binary
+
+const pad4 = (buf) => (buf.length % 4 ? Buffer.concat([buf, Buffer.alloc(4 - (buf.length % 4))]) : buf);
 
 function glbFor(character) {
   const binParts = [];
   let offset = 0;
   const bufferViews = [];
   const accessors = [];
-  function push(data, typeBytes) {
-    if (offset % typeBytes) {
-      const pad = typeBytes - (offset % typeBytes);
+  function push(data, target) {
+    if (offset % 4) {
+      const pad = 4 - (offset % 4);
       binParts.push(Buffer.alloc(pad));
       offset += pad;
     }
     const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: buf.length });
+    bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: buf.length, ...(target ? { target } : {}) });
     binParts.push(buf);
     offset += buf.length;
     return bufferViews.length - 1;
   }
-  const nodes = [];
+  const nodes = [{ name: "Armature", children: [] }];
   const boneNodeStart = 1;
-  nodes.push({ name: "Armature", children: [] });
   character.bones.forEach((name, i) => {
-    const node = {
-      name,
-      translation: character.boneLocals[i].map((v) => +v.toFixed(5)),
-    };
+    const node = { name, translation: character.boneLocals[i].map((v) => +v.toFixed(5)) };
     const kids = [];
     character.bones.forEach((other, j) => {
       if (character.parent[j] === name) kids.push(boneNodeStart + j);
@@ -543,8 +252,7 @@ function glbFor(character) {
     const parent = character.parent[i];
     const pi = parent ? character.bones.indexOf(parent) : -1;
     const lt = character.boneLocals[i];
-    if (pi < 0) world[i] = [...lt];
-    else world[i] = [world[pi][0] + lt[0], world[pi][1] + lt[1], world[pi][2] + lt[2]];
+    world[i] = pi < 0 ? [...lt] : [world[pi][0] + lt[0], world[pi][1] + lt[1], world[pi][2] + lt[2]];
     const o = i * 16;
     inv[o] = 1;
     inv[o + 5] = 1;
@@ -554,49 +262,57 @@ function glbFor(character) {
     inv[o + 13] = -world[i][1];
     inv[o + 14] = -world[i][2];
   });
-  const invView = push(inv, 4);
-  accessors.push({
-    bufferView: invView,
-    componentType: 5126,
-    count: character.bones.length,
-    type: "MAT4",
-  });
+  accessors.push({ bufferView: push(inv), componentType: 5126, count: character.bones.length, type: "MAT4" });
   const meshes = [];
   const meshNodes = [];
-  for (const mesh of character.meshes) {
-    if (!mesh.idx.length) continue;
-    const pos = Float32Array.from(mesh.pos);
-    const nrm = Float32Array.from(mesh.nrm);
-    const joints = Uint16Array.from(mesh.joints);
-    const weights = Float32Array.from(mesh.weights);
-    const idx = Uint16Array.from(mesh.idx);
-    let min = [Infinity, Infinity, Infinity];
-    let max = [-Infinity, -Infinity, -Infinity];
+  for (const part of character.parts) {
+    const s = part.surface;
+    if (!s.T.length) throw new Error(`${character.kind} part ${part.name} is empty`);
+    const pos = Float32Array.from(s.P);
+    const nrm = Float32Array.from(part.normals);
+    const uv = new Float32Array(s.n * 2);
+    for (let i = 0; i < s.n; i++) {
+      uv[i * 2] = s.UV[i * 2];
+      uv[i * 2 + 1] = 1 - s.UV[i * 2 + 1]; // obj uvs start bottom left, glTF top left
+    }
+    const joints = new Uint16Array(s.n * 4);
+    const weights = new Float32Array(s.n * 4);
+    for (let i = 0; i < s.n; i++) {
+      s.INF[i].slice(0, 4).forEach(([bone, w], k) => {
+        const idx = character.boneIndex.get(bone);
+        if (idx === undefined) throw new Error(`unknown bone ${bone} on ${part.name}`);
+        joints[i * 4 + k] = idx;
+        weights[i * 4 + k] = w;
+      });
+    }
+    const big = s.n > 65535;
+    const idx = big ? Uint32Array.from(s.T) : Uint16Array.from(s.T);
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
     for (let i = 0; i < pos.length; i += 3) {
       for (let k = 0; k < 3; k++) {
         min[k] = Math.min(min[k], pos[i + k]);
         max[k] = Math.max(max[k], pos[i + k]);
       }
     }
-    const views = [push(pos, 4), push(nrm, 4), push(joints, 4), push(weights, 4), push(idx, 4)];
-    const base = accessors.length;
-    accessors.push(
-      { bufferView: views[0], componentType: 5126, count: pos.length / 3, type: "VEC3", min, max },
-      { bufferView: views[1], componentType: 5126, count: nrm.length / 3, type: "VEC3" },
-      { bufferView: views[2], componentType: 5123, count: joints.length / 4, type: "VEC4" },
-      { bufferView: views[3], componentType: 5126, count: weights.length / 4, type: "VEC4" },
-      { bufferView: views[4], componentType: 5123, count: idx.length, type: "SCALAR" },
-    );
-    meshes.push({
-      name: mesh.name,
-      primitives: [{
-        attributes: { POSITION: base, NORMAL: base + 1, JOINTS_0: base + 2, WEIGHTS_0: base + 3 },
-        indices: base + 4,
-      }],
-    });
-    const nodeIndex = nodes.length;
-    nodes.push({ name: mesh.name, mesh: meshes.length - 1, skin: 0 });
-    meshNodes.push(nodeIndex);
+    const attrs = {};
+    const add = (semantic, data, type, comp = 5126, extra = {}) => {
+      const view = push(data, 34962);
+      accessors.push({ bufferView: view, componentType: comp, count: s.n, type, ...extra });
+      attrs[semantic] = accessors.length - 1;
+    };
+    add("POSITION", pos, "VEC3", 5126, { min, max });
+    add("NORMAL", nrm, "VEC3");
+    add("TEXCOORD_0", uv, "VEC2");
+    add("JOINTS_0", joints, "VEC4", 5123);
+    add("WEIGHTS_0", weights, "VEC4");
+    if (s.A.TRIM) add("_TRIM", Float32Array.from(s.A.TRIM.data), "SCALAR");
+    if (part.color) add("COLOR_0", part.color, "VEC3");
+    const idxView = push(idx, 34963);
+    accessors.push({ bufferView: idxView, componentType: big ? 5125 : 5123, count: idx.length, type: "SCALAR" });
+    meshes.push({ name: part.name, primitives: [{ attributes: attrs, indices: accessors.length - 1 }] });
+    nodes.push({ name: part.name, mesh: meshes.length - 1, skin: 0 });
+    meshNodes.push(nodes.length - 1);
   }
   nodes[0].children = rootChildren.concat(meshNodes);
   const bin = pad4(Buffer.concat(binParts));
@@ -635,22 +351,182 @@ function glbFor(character) {
   return out;
 }
 
-const obj = parseObj(await text(`${ROOT}/3dobjs/base.obj`));
-const skel = JSON.parse(await text(`${ROOT}/rigs/default.mhskel`));
-const weightText = await text(`${ROOT}/rigs/default_weights.mhw`);
-const vertCount = obj.verts.length / 3;
-const infl = influencesFrom(weightText, vertCount);
-console.log("base", vertCount, "faces", obj.faces.length / 4);
+// ---------------------------------------------------------------------------------------------------------------
+// one body
 
-const race = { caucasian: 0.42, african: 0.3, asian: 0.28 };
-const maleTargets = await loadMacro("male", 0.78, 0.22, race);
-const femaleTargets = await loadMacro("female", 0.66, 0.26, race);
-const male = buildCharacter("male", obj.verts, obj.faces, infl, skel, maleTargets);
-const female = buildCharacter("female", obj.verts, obj.faces, infl, skel, femaleTargets);
-const maleGlb = glbFor(male);
-const femaleGlb = glbFor(female);
+async function buildCharacter(kind, spec, base, skel, infl) {
+  const vertsDm = await shapeBody(kind, spec.shape, RACE, base.verts);
+  const verts = vertsDm.map((v) => v * 0.1);
+  const joints = jointMap(skel, verts);
+  const measures = measureBody({ verts, bodyFaces: base.groups.get("body"), joints, infl });
+  log(`${kind} proportions:`);
+  for (const line of formatMeasure(measures)) log("  " + line);
+
+  // body
+  const bodyFaces = triangulate(base.groups.get("body"));
+  const body = surfaceFromBase(verts, base.uvs, infl, bodyFaces.tv, bodyFaces.tt);
+  if (!windsOutward(body)) flipWinding(body);
+  const bodyNormals = computeNormals(body);
+
+  const parts = [{ name: "body", surface: body, normals: bodyNormals }];
+  const counts = {};
+
+  // teeth stay: the base mesh's own helper teeth
+  const teethFaces = triangulate([...base.groups.get("helper-upper-teeth"), ...base.groups.get("helper-lower-teeth")]);
+  const teeth = surfaceFromBase(verts, base.uvs, infl, teethFaces.tv, teethFaces.tt);
+  parts.push({ name: "teeth", surface: teeth, normals: computeNormals(teeth) });
+
+  // eyes, brows, lashes, hair
+  // The high-poly eye proxy is two shells per eye: the eyeball (iris + sclera in the texture) and a slightly larger
+  // transparent cornea whose uvs all point at the small blue disc in the texture's corner. The cornea is dropped (the
+  // eye material's clearcoat stands in for it); keeping it would paint the disc, which has alpha 0, as black.
+  const eyes = await proxySurface(EYE.mesh, vertsDm, infl, undefined, (uvs) => {
+    const u = uvs.reduce((a, p) => a + p[0], 0) / uvs.length;
+    const v = uvs.reduce((a, p) => a + p[1], 0) / uvs.length;
+    return !(u > 0.85 && v < 0.15);
+  });
+  licenceOf("high-poly");
+  if (!windsOutward(eyes.s)) flipWinding(eyes.s); // two closed balls: the front faces must be the outside
+  parts.push({ name: "eyes", surface: eyes.s, normals: computeNormals(eyes.s) });
+  const brows = await proxySurface(`eyebrows/${spec.brows}/${spec.brows}`, vertsDm, infl);
+  licenceOf(spec.brows);
+  parts.push({ name: "brows", surface: brows.s, normals: computeNormals(brows.s) });
+  const lashes = await proxySurface(`eyelashes/${spec.lashes}/${spec.lashes}`, vertsDm, infl);
+  licenceOf(spec.lashes);
+  parts.push({ name: "lashes", surface: lashes.s, normals: computeNormals(lashes.s) });
+  const hair = await proxySurface(`hair/${spec.hair}/${spec.hair}`, vertsDm, infl, "head");
+  licenceOf(spec.hair);
+  const headC = joints["head____head"].map((v, k) => (v + joints["head____tail"][k]) / 2);
+  parts.push({ name: "hair", surface: hair.s, normals: hairNormals(hair.s, headC, 0.6) });
+  const hairMat = parseMhmat((await asset(`hair/${spec.hair}/${spec.hair}.mhmat`)).toString());
+
+  // clothes
+  G.prepareBody(body);
+  parts[0].color = cavityColors(body); // COLOR_0 on the skin: hollows are darker (see lib/skinbake.mjs)
+  const A = G.anatomy(body, joints);
+  // Men wear board shorts and nothing else (Ed, 2026-10-21: no shirts, no suits for men); the women's cuts are the bikini, the
+  // rashguard (worn with the bikini bottom as one matching set), the fullsuit and the springsuit.
+  const outfit = kind === "male" ? { trunks: G.trunks } : { bikiniBottom: G.bikiniBottom, bikiniTop: G.bikiniTop, rash: G.rash, fullsuit: G.fullsuit, springsuit: G.springsuit };
+  for (const [name, make] of Object.entries(outfit)) {
+    const s = make(body, A, kind);
+    parts.push({ name, surface: s, normals: computeNormals(s) });
+    // how sharp a corner each border of the garment has: the turning angle between the two segments meeting at each border point
+    const { turns, degree, hot } = hemReport(s);
+    const all = turns.flat().sort((x, y) => x - y);
+    if (all.length) console.log(`hem ${kind} ${name}: ${turns.length} border loops, ${all.length} points, turning angle max ${all[all.length - 1].toFixed(1)} deg, p99 ${all[Math.floor(all.length * 0.99)].toFixed(1)} deg, median ${all[Math.floor(all.length / 2)].toFixed(1)} deg; border vertex degrees ${JSON.stringify(degree)}`);
+    if (hot.length) console.log(`   sharpest points (turn over 45 deg, x y z in metres): ${hot.sort((a, b) => b.deg - a.deg).slice(0, 5).map((h) => `${h.deg.toFixed(0)} deg at ${h.at.map((v) => v.toFixed(3)).join(",")}`).join("; ")}`);
+  }
+  for (const p of parts) counts[p.name] = triCount(p.surface);
+
+  // body part carries PS/BN/TRIM attributes for the cutting; the glb keeps only what the game reads
+  body.A = {};
+
+  // reference skin: torso, arms and legs (not head, hands, feet) for the mean of the skin detail map
+  const SKIN_REF_BAD = /^(head|neck|jaw|eye|oculi|orbicularis|oris|levator|risorius|temporalis|special|tongue|wrist|metacarpal|finger|foot|toe)/;
+  const refMask = uvMask(body, TEX.skin, (t) => {
+    let bad = 0;
+    for (let k = 0; k < 3; k++) for (const [b, w] of body.INF[body.T[t * 3 + k]]) if (SKIN_REF_BAD.test(b)) bad += w;
+    return bad / 3 < 0.2;
+  });
+  const HEAD_NOT = /^(root|pelvis|spine|breast|clavicle|shoulder|upperarm|lowerarm|wrist|metacarpal|finger|upperleg|lowerleg|foot|toe)/;
+  const isHead = (t) => {
+    let w = 0;
+    for (let k = 0; k < 3; k++) for (const [b, x] of body.INF[body.T[t * 3 + k]]) if (!HEAD_NOT.test(b)) w += x;
+    return w / 3 > 0.5;
+  };
+  const hairSurface = parts.find((p) => p.name === "hair").surface;
+  return { kind, spec, measures, parts, counts, joints, refMask, hairMat, A, body, bodyNormals, hairSurface, isHead };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+
+const base = parseObj(await githubText("3dobjs/base.obj"));
+const skel = JSON.parse(await githubText("rigs/default.mhskel"));
+const infl = influencesFrom(await githubText("rigs/default_weights.mhw"), base.verts.length / 3);
+log("base", base.verts.length / 3, "vertices,", base.uvs.length / 2, "uvs,", [...base.groups.get("body")].length, "body faces");
+
+const bones = boneOrder(skel);
+const boneIndex = new Map(bones.map((n, i) => [n, i]));
+const textures = { skin: {}, hair: {}, brows: {}, lashes: {}, eye: null };
+const glbs = {};
+const report = {};
+
+for (const [kind, spec] of Object.entries(KINDS)) {
+  const ch = await buildCharacter(kind, spec, base, skel, infl);
+  const jointsM = ch.joints;
+  const boneLocals = bones.map((name) => {
+    const b = skel.bones[name];
+    const head = jointsM[b.head];
+    const parent = b.parent ? jointsM[skel.bones[b.parent].head] : [0, 0, 0];
+    return [head[0] - parent[0], head[1] - parent[1], head[2] - parent[2]];
+  });
+  const glb = glbFor({ kind, bones, boneIndex, boneLocals, parent: bones.map((n) => skel.bones[n].parent), parts: ch.parts });
+  glbs[kind] = glb;
+  record(`${kind} glb`, glb);
+  report[kind] = ch.counts;
+
+  // hair: colour jpeg + alpha png (decoded first: the skin bake needs the alpha)
+  const hairSrc = resize(decodePng(await asset(`hair/${spec.hair}/${spec.hair}_diffuse.png`)), TEX.hair, TEX.hair);
+  const scalp = scalpMask({
+    body: ch.body,
+    normals: ch.bodyNormals,
+    hair: ch.hairSurface,
+    alpha: { w: hairSrc.w, h: hairSrc.h, data: hairSrc.data },
+    size: TEX.skin,
+    isHead: ch.isHead,
+  });
+  let covered = 0;
+  for (const v of scalp) if (v > 0.5) covered++;
+  log(`  scalp under ${spec.hair}: ${covered} texels (${((covered / (TEX.skin * TEX.skin)) * 100).toFixed(2)}% of the skin map) darkened`);
+  // skin detail maps: one per family, mean-normalised
+  textures.skin[kind] = {};
+  for (const [family, path] of Object.entries(spec.skins)) {
+    const item = path.split("/")[1];
+    licenceOf(item);
+    const src = resize(decodePng(await asset(path)), TEX.skin, TEX.skin);
+    const { img, mean } = meanNormalise(src, (x, y) => ch.refMask[y * TEX.skin + x] === 1, SKIN_LEVEL);
+    darkenScalp(img, scalp, spec.scalpFloor);
+    textures.skin[kind][family] = uri(record(`${kind} skin ${family} jpg`, encodeJpeg(img, 86)), "image/jpeg");
+    log(`  skin ${kind}/${family}: source mean RGB ${mean.map((v) => v.toFixed(0)).join(",")}`);
+  }
+  const hairAlpha = encodeAlphaPng(hairSrc);
+  tintHair(hairSrc, spec.hairColour);
+  bleedColour(hairSrc, 8);
+  textures.hair[kind] = {
+    map: uri(record(`${kind} hair colour jpg`, encodeJpeg(opaque(hairSrc), 84)), "image/jpeg"),
+    alpha: uri(record(`${kind} hair alpha png`, hairAlpha), "image/png"),
+  };
+  // brows and lashes are black strokes on alpha: only the alpha is kept (the game colours the strokes)
+  const browSrc = resize(decodePng(await asset(`eyebrows/${spec.brows}/${spec.brows}.png`)), TEX.brows, TEX.brows);
+  textures.brows[kind] = uri(record(`${kind} brows alpha png`, encodeAlphaPng(browSrc)), "image/png");
+  const lashSrc = resize(decodePng(await asset(`eyelashes/${spec.lashes}/${spec.lashes}.png`)), TEX.lashes, TEX.lashes);
+  textures.lashes[kind] = uri(record(`${kind} lashes alpha png`, encodeAlphaPng(lashSrc)), "image/png");
+}
+{
+  licenceOf("brown");
+  const eye = resize(decodePng(await asset("eyes/materials/brown_eye.png")), TEX.eye, TEX.eye);
+  textures.eye = uri(record("eye jpg", encodeJpeg(opaque(eye), 90)), "image/jpeg");
+  await asset(EYE.material);
+}
+
 mkdirSync(dirname(outFile), { recursive: true });
-const banner = `// Generated by scripts/build-surfers.mjs from MakeHuman CC0 assets. Do not edit.
-`;
-writeFileSync(outFile, `${banner}export const maleB64 = ${JSON.stringify(maleGlb.toString("base64"))};\nexport const femaleB64 = ${JSON.stringify(femaleGlb.toString("base64"))};\n`);
-console.log("wrote", outFile, "male", maleGlb.length, "female", femaleGlb.length);
+const banner = `// Generated by scripts/build-surfers.mjs from MakeHuman CC0 assets (see ASSETS.md). Do not edit.\n`;
+writeFileSync(
+  outFile,
+  `${banner}export const maleB64 = ${JSON.stringify(glbs.male.toString("base64"))};\nexport const femaleB64 = ${JSON.stringify(glbs.female.toString("base64"))};\nexport const textures = ${JSON.stringify(textures)};\n`,
+);
+
+console.log("\ntriangles per mesh");
+for (const kind of Object.keys(report)) console.log(`  ${kind}: ${Object.entries(report[kind]).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+for (const kind of Object.keys(report)) {
+  const r = report[kind];
+  const head = r.body + r.eyes + r.brows + r.lashes + r.teeth + r.hair;
+  const outfits = Object.entries(r).filter(([k]) => !["body", "eyes", "brows", "lashes", "teeth", "hair"].includes(k));
+  const worst = r.trunks || r.rash + r.bikiniBottom; // the most any one outfit shows: trunks, or the rashguard set
+  console.log(`  ${kind}: body+face+hair ${head}; all outfit meshes together ${outfits.reduce((a, [, v]) => a + v, 0)}; worst visible loadout (trunks or rashguard set) ${head + worst}; every mesh in the file ${Object.values(r).reduce((a, v) => a + v, 0)}`);
+}
+console.log("\nbytes");
+for (const [label, n] of sizes) console.log(`  ${label.padEnd(24)} ${n}`);
+console.log("fetched assets:");
+for (const u of used) console.log(`  ${u.file}`);
+console.log("wrote", outFile, `(${(Buffer.byteLength(JSON.stringify(textures)) / 1e6).toFixed(2)} MB of texture data URIs)`);

@@ -4,3 +4,4 @@ single
 .DS_Store
 *.local
 .vite
+.cache
