@@ -49,7 +49,11 @@
   },
   "hazards": {
     "_about": "Hazard counts follow the old per-event ramp (sharks from event 3, reef from 2, closeouts from 4, loose boards from 5) for the first rampSeasons seasons, then stay at the level event rampSeasons*10 had.",
-    "rampSeasons": 3
+    "rampSeasons": 3,
+    "_lead": "Where the first shark and the first loose board sit (metres down the wave from the drop-in) and the gap between hazards of one kind. The drop-in is z -16, speed about 10 m/s, so these give the player about 4 s to read the warning and steer; they were 30 and 36 (about 1.4 s) before the polish pass.",
+    "sharkFrom": 58,
+    "boardFrom": 82,
+    "spacing": 44
   },
   "twists": {
     "_about": "Rule twists. A season from seasonTwistFrom on carries one season twist, picked in blocks of all six in a seeded order, active every event of the season. eventTwists are the fixed mid-season specials by event number (every season). At most maxActive are ever on at once (a season twist plus one event special).",

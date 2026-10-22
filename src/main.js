@@ -15,17 +15,19 @@ import {
 } from "./competition.js";
 import { catalog, equipItem, grantReward, isBody, itemMap, loadSave, logEventPlace, logHeat, logWave, registerGear, settleFinish, switchBody, writeSave } from "./save.js";
 import { exportLog } from "./playlog.js";
+import { mountCues } from "./cues.js";
 import { eventNumber } from "./season.js";
 import * as printArt from "./printart.js";
 import { CLOTH_CEILING } from "./printmat.js";
 import { BOARD_SHAPES, createBoardParts } from "./board.js";
-import { bindPanel, briefHTML, freeEndHTML, heatResultHTML, menuHTML, mountUI, tourEndHTML } from "./ui.js";
+import { bindPanel, briefHTML, freeEndHTML, heatResultHTML, helpHTML, menuHTML, mountUI, tourEndHTML } from "./ui.js";
 import { openLockerView, thumbCacheBytes, thumbCacheSize, thumbStats } from "./locker.js";
 
 const canvas = document.getElementById("c");
 const world = await createWorld(canvas);
 const ride = createRide();
 const ui = mountUI();
+const cues = mountCues();
 const save = loadSave();
 // Every wearable item by id: the catalog plus the gear this save has won. Refreshed whenever gear is granted.
 const byId = itemMap();
@@ -106,11 +108,15 @@ function show(html) {
   closeLocker();
   ui.panels.innerHTML = html || "";
   ui.panels.style.display = html ? "block" : "none";
+  // CSS hooks: a screen is up (the Restart button hides) or the ride is on
+  document.body.classList.toggle("in-panel", !!html);
   if (!html) return;
   bindPanel(ui.panels, {
     free: () => startFree(),
     tour: () => openBrief(),
     locker: () => openLocker(),
+    help: () => show(helpHTML()),
+    helpBack: () => show(menuHTML(save)),
     menu: () => enterMenu(),
     skin: (color) => {
       save.loadout.skin = color;
@@ -244,6 +250,9 @@ function beginHeat() {
   ride.msg = "Drop in";
   ride.msgT = 2;
 }
+
+// seconds after a wave is judged that the next wave window opens at the latest (the 1.3 s gap is part of it)
+const WINDOW_SOON = 2.2;
 
 // When each wave window opens: 12 s apart in the standard 42 s heat, the same share of the clock in a shorter one.
 function heatWindows(seconds, waves) {
@@ -409,6 +418,10 @@ function onWaveEnded() {
     endHeat();
     return;
   }
+  // dead time: a short or fallen wave must not leave the player waiting for the next wave window to open (the rival
+  // holds priority until it does), so the next window opens soon after this wave is judged
+  const nextWindow = heat.window + 1;
+  if (nextWindow < heat.windows.length) heat.windows[nextWindow] = Math.min(heat.windows[nextWindow], heat.clock + WINDOW_SOON);
   app.mode = "gap";
   app.gap = 1.3;
   ride.msg = judged.interference ? `Interference ${judged.total.toFixed(1)}` : judged.forgiven ? `${judged.total.toFixed(1)} · fresh wave` : judged.total.toFixed(1);
@@ -554,6 +567,7 @@ function paintHud() {
   const t = Math.max(0, Math.min(1, -ride.d / 28));
   ui.depth.style.left = (t * 100).toFixed(1) + "%";
   ui.depth.className = ride.d > -2.2 ? "danger" : ride.inTube ? "good" : "";
+  cues.update(ride, app.mode === "ride", app.input.thr);
 }
 
 function loop(now) {

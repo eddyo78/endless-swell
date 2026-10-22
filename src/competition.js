@@ -142,6 +142,7 @@ function eventSeed(season, event) {
 }
 
 const HEAT = tourData.heat;
+const HAZ = tourData.hazards;
 const WARM = tourData.warmup;
 
 /**
@@ -200,7 +201,7 @@ export function generateTour(n) {
   if (hn >= 3) {
     const count = Math.min(4, 1 + Math.floor((hn - 3) / 6));
     for (let i = 0; i < count; i++) {
-      sharks.push({ s: 0.24 + rand() * 0.42, z: -30 - i * 34 - rand() * 8, wobble: rand() * 6.28 });
+      sharks.push({ s: 0.24 + rand() * 0.42, z: -HAZ.sharkFrom - i * HAZ.spacing - rand() * 8, wobble: rand() * 6.28 });
     }
   }
   const reef = [];
@@ -222,7 +223,7 @@ export function generateTour(n) {
   const boards = [];
   if (hn >= 5) {
     const count = Math.min(3, 1 + Math.floor((hn - 5) / 10));
-    for (let i = 0; i < count; i++) boards.push({ s: 0.22 + rand() * 0.36, z: -36 - i * 32, wobble: rand() * 4 });
+    for (let i = 0; i < count; i++) boards.push({ s: 0.22 + rand() * 0.36, z: -HAZ.boardFrom - i * HAZ.spacing, wobble: rand() * 4 });
   }
 
   const locationId = seasonCalendar(season)[event - 1];
@@ -281,7 +282,7 @@ function rideParts(stats, cond) {
   const commit = clamp((avgS - 0.16) * 3.1 + ((cond.feet || 8) - 4) / 16 * 0.7 + stats.committed * 0.05, 0, 1.7);
   const speed = clamp((avgSpeed - 6.2) * 0.2 + (stats.maxSpeed - 8) * 0.05, 0, 1.65);
   const flow = clamp(flowScore * 1.15, 0, 1.15);
-  const variety = clamp(stats.pumps * 0.16 + stats.turns * 0.11 + Math.min(stats.stalls, 2.2) * 0.14, 0, 1.15);
+  const variety = clamp(stats.goodPumps * 0.2 + (stats.pumps - stats.goodPumps) * 0.04 + stats.turns * 0.11 + Math.min(stats.stalls, 2.2) * 0.14, 0, 1.15);
   let spit = stats.spit ? 0.8 : 0;
   if (hasTwist(cond, "spit-double")) spit *= 2;
   return { tube, commit, speed, flow, variety, spit };
@@ -312,7 +313,7 @@ export function judgeWave(stats, cond, opts = null) {
     return { total: Math.round(partial * 10) / 10, wipe: true, parts: { partial } };
   }
   const { tube, commit, speed, flow, variety, spit } = rideParts(stats, cond);
-  const exit = stats.clean ? 1 : 0.2;
+  const exit = stats.clean ? 1 : stats.kick ? 0.6 : 0.2;
   const total = clamp(tube + commit + speed + flow + variety + exit + spit, 0, 10);
   return {
     total: Math.round(total * 10) / 10,

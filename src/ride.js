@@ -14,6 +14,22 @@ import {
 import { applyPose } from "./surfer.js";
 
 const G = 9.81;
+// steering: push, damping (the lag of a turn is about 1/STEER_DAMP seconds), and the pocket the board settles toward
+const GRAV_CAP = 2.6;
+// the autopilot is a good rider, not a perfect one: it pumps a little behind the beat
+const AUTO_LATE = 0.08;
+const WARN_AHEAD = 34;
+const KICK_MIN = 5;
+// the wind twist's push is set in tour.json against the old steering push of 2.7; scaled so it still costs a rider who has to correct it (the quicker steering would otherwise shrug it off)
+const WIND_SCALE = 2.2;
+const LIP_GRACE = 0.4;
+const STEER = 4.6;
+const STEER_DAMP = 6;
+const SETTLE = 3;
+const TRIM_S = 0.5;
+// the pump rhythm: the best interval between pumps and the width of the timing window (in seconds squared, a Gaussian)
+export const PUMP_BEAT = 0.5;
+export const PUMP_WIDTH = 0.03;
 
 export function blankStats() {
   return {
@@ -25,11 +41,13 @@ export function blankStats() {
     samples: 0,
     maxSpeed: 0,
     pumps: 0,
+    goodPumps: 0,
     stalls: 0,
     turns: 0,
     sSum: 0,
     lastSteer: 0,
     clean: false,
+    kick: false,
     spit: false,
     wipe: false,
   };
@@ -70,6 +88,10 @@ export function createRide() {
     wakeT: 0,
     pumpWas: false,
     lastPump: -10,
+    pumpFx: { t: -10, q: 0, gap: 0 },
+    lipT: 0,
+    sMax: 1.1,
+    warn: { text: "", level: 0 },
     pose: { crouch: 0.45, glide: 0.55, claim: 0, wipe: 0 },
     live: null,
     stats: blankStats(),
@@ -124,6 +146,12 @@ export function resetRide(st, cond, opts = {}) {
   st.wakeT = 0;
   st.pumpWas = false;
   st.lastPump = -10;
+  st.pumpFx.t = -10;
+  st.pumpFx.q = 0;
+  st.pumpFx.gap = 0;
+  st.lipT = 0;
+  st.warn.text = "";
+  st.warn.level = 0;
   st.pose.crouch = 0.5;
   st.pose.glide = 0.5;
   st.pose.claim = 0;
@@ -158,6 +186,14 @@ function claim(st) {
   st.score += 1000;
   st.msg = "CLEAN EXIT";
   st.msgT = 2.2;
+}
+
+/** Riding the wave out without a wipeout and without a tube exit is still a kick-out: it scores a better exit than a fall off the back. */
+function kickOut(st) {
+  if (st.stats.clean || st.stats.kick || st.mode !== "ride" || st.t < KICK_MIN) return;
+  st.stats.kick = true;
+  st.msg = "KICK OUT";
+  st.msgT = 1.6;
 }
 
 function finish(st, reason) {
@@ -216,15 +252,25 @@ export function updateRide(st, dt, input, cond) {
     if (input.thr < -0.4) st.stats.stalls += dt;
     let boost = 0;
     if (pumpEdge) {
+      // a pump pays by rhythm: one about every PUMP_BEAT seconds is worth the most; mashing is worth almost nothing, so the
+      // timing is the skill. The first pump of a ride counts as decent, and a pump while the lip is closing in is always a
+      // real fighting chance (the rescue floor).
       const period = st.t - st.lastPump;
-      const timed = st.stats.pumps > 0 ? Math.exp(-((period - 0.42) ** 2) / 0.05) : 0.25;
-      boost = 16 * timed + 5.5;
+      let timed = st.stats.pumps > 0 ? Math.exp(-((period - PUMP_BEAT) ** 2) / PUMP_WIDTH) : 0.7;
+      if (st.d > -4) timed = Math.max(timed, 0.75);
+      boost = 11 * timed + 2.5 * clamp((period - 0.2) / 0.2, 0, 1);
+      st.pumpFx.t = st.t;
+      st.pumpFx.q = timed;
+      st.pumpFx.gap = st.stats.pumps > 0 ? period - PUMP_BEAT : 0;
       st.stats.pumps += 1;
+      if (timed >= 0.5) st.stats.goodPumps += 1;
       st.lastPump = st.t;
     }
     st.pumpWas = input.thr > 0.45;
     const stall = clamp(-input.thr, 0, 1);
-    const drive = (3.4 + 6.8 * Math.max(preFrame.ty, 0) * pre.p) * (1 - stall * 0.55) * (0.84 + live.feet * 0.016);
+    // holding up trims the board for speed (about a third more drive); it is the easy way to keep pace, pumping is the way to pull ahead
+    const trim = 1 + 0.34 * clamp(input.thr, 0, 1);
+    const drive = (3.4 + 6.8 * Math.max(preFrame.ty, 0) * pre.p) * trim * (1 - stall * 0.55) * (0.84 + live.feet * 0.016);
     let accel = drive / Math.max(st.speed, 1);
     accel += (-G * vy) / Math.max(st.speed, 1);
     const drag = (st.speed < 5.2 ? 0.45 : 0.055) + stall * 0.28 + live.wind * 0.16;
@@ -234,16 +280,27 @@ export function updateRide(st, dt, input, cond) {
     st.speed = clamp(st.speed, 3.1, 16.2 + live.feet * 0.12);
 
     const sMax = Math.min(pre.S * 0.9, THREE.MathUtils.lerp(1.58, 1.1, live.tight));
-    const gravPull = (-5.4 * Math.max(preFrame.ty, 0)) / arc;
+    st.sMax = sMax;
+    // gravity down the face is capped below the steering push: on a small wave it used to out-pull the keys, so "up" could not be held
+    const gravPull = Math.max((-5.4 * Math.max(preFrame.ty, 0)) / arc, -GRAV_CAP);
+    // Hands off the keys the board settles toward the pocket (a soft spring) instead of sliding to the bottom of the face;
+    // the more you steer, the less the spring and the pull matter, so a held key still goes where it points.
+    const hands = 1 - Math.min(1, Math.abs(input.steer) * 3);
+    const settle = -hands * SETTLE * (st.s - Math.min(TRIM_S, sMax * 0.85));
     // windPush: the side-shore wind twist shoves the board with a steady push, in steering units (negative: down the face, toward the trough)
-    st.vs += (input.steer * 2.7 + gravPull * (1 - stall * 0.65) + (cond.windPush || 0)) * dt;
-    st.vs *= Math.exp(-dt * 3.5);
+    st.vs += (input.steer * STEER + gravPull * (input.steer < 0 ? 1 : 0) * (1 - 0.9 * hands) * (1 - stall * 0.65) + settle + (cond.windPush || 0) * WIND_SCALE) * dt;
+    st.vs *= Math.exp(-dt * STEER_DAMP);
     st.s += st.vs * dt;
     if (st.s > sMax) {
-      if (pre.p > 0.5 && st.vs > 0.22 && st.mode === "ride") wipe(st, "Too high — sucked over the falls");
+      // pushing into the lip for LIP_GRACE seconds sucks you over; touching it for a moment does not
+      if (pre.p > 0.5 && input.steer > 0.2 && st.mode === "ride") {
+        st.lipT += dt;
+        if (st.lipT > LIP_GRACE) wipe(st, "Too high — sucked over the falls");
+      }
       st.s = sMax;
       st.vs = Math.min(st.vs, 0);
     }
+    if (st.s < sMax - 0.02 || input.steer < 0.2) st.lipT = Math.max(0, st.lipT - dt * 2);
     if (st.s < 0.08) {
       st.s = 0.08;
       st.vs = Math.max(st.vs, 0);
@@ -287,10 +344,14 @@ export function updateRide(st, dt, input, cond) {
       }
       if (st.d < -46) {
         st.lost += dt;
-        if (st.lost > 2) finish(st, st.stats.clean ? "Wave over." : "You outran it onto the shoulder.");
+        if (st.lost > 2) {
+          kickOut(st);
+          finish(st, st.stats.clean ? "Wave over." : "You outran it onto the shoulder.");
+        }
       } else st.lost = 0;
       if (st.t > st.maxRide) {
         if (st.tube > 1.4 && st.mode === "ride") claim(st);
+        else kickOut(st);
         finish(st, "Wave over.");
       }
       for (const shark of cond.sharks || []) {
@@ -316,6 +377,7 @@ export function updateRide(st, dt, input, cond) {
     }
     st.inTube = inTube && st.mode !== "wipe";
     st.deep = deep && st.mode !== "wipe";
+    setWarning(st, cond, live, P, sMax, extra);
 
     st.stats.samples += 1;
     st.stats.speedSum += st.speed;
@@ -347,6 +409,53 @@ export function updateRide(st, dt, input, cond) {
   if (st.msgT > 0) st.msgT -= dt;
 }
 
+/**
+ * The line round a hazard at face position hs, z: the side that has room. Low is open down to the reef line (higher where a reef
+ * sits at the same spot); high only while there is face left. Returns { high, target } (target is the face position to hold).
+ */
+export function dodgeLine(st, cond, h) {
+  const reefHere = (cond.reef || []).some((r) => h.z < Math.max(r.z0, r.z1) + 8 && h.z > Math.min(r.z0, r.z1) - 8);
+  const lowOk = h.s - 0.34 > (reefHere ? 0.3 : 0.2);
+  const highOk = h.s + 0.34 < st.sMax - 0.04;
+  const high = highOk && (!lowOk || h.s < st.s || reefHere);
+  return { high, target: high ? h.s + 0.34 : h.s - 0.34 };
+}
+
+function dodgeWay(st, cond, h) {
+  return dodgeLine(st, cond, h).high ? "GO HIGH (LEFT)" : "GO LOW (RIGHT)";
+}
+
+/** The one warning the player needs right now (st.warn: text, level 1 heads-up / 2 act now), for the HUD. Pure read of state. */
+function setWarning(st, cond, live, P, sMax, extra) {
+  const w = st.warn;
+  w.text = "";
+  w.level = 0;
+  if (st.mode !== "ride") return;
+  const say = (text, level) => {
+    if (level > w.level) {
+      w.text = text;
+      w.level = level;
+    }
+  };
+  for (const shark of cond.sharks || []) {
+    const dz = st.z - shark.z; // positive: the fin is still ahead (we travel toward -z)
+    if (dz > 0 && dz < WARN_AHEAD && Math.abs(shark.s - st.s) < 0.2) say(`SHARK AHEAD: ${dodgeWay(st, cond, shark)}`, dz < 14 ? 2 : 1);
+  }
+  for (const board of cond.boards || []) {
+    const dz = st.z - board.z;
+    if (dz > 0 && dz < WARN_AHEAD && Math.abs(board.s - st.s) < 0.18) say(`LOOSE BOARD: ${dodgeWay(st, cond, board)}`, dz < 12 ? 2 : 1);
+  }
+  for (const reef of cond.reef || []) {
+    const hi = Math.max(reef.z0, reef.z1);
+    const lo = Math.min(reef.z0, reef.z1);
+    if (st.z > lo && st.z < hi + WARN_AHEAD && st.s < 0.34) say("REEF: STAY UP THE FACE (LEFT)", st.z < hi ? 2 : 1);
+  }
+  if (extraCloseout(st.z - WARN_AHEAD * 0.8, live.zones) > 0.3 && !st.spitDone) say(extra > 0.3 ? "CLOSEOUT: PUMP, RUN AHEAD OF THE LIP" : "CLOSEOUT AHEAD", extra > 0.3 ? 2 : 1);
+  if (st.d < -26 && !st.inTube && !st.spitDone) say("OUT AHEAD OF THE CURL: EASE OFF, LET IT CATCH YOU", st.d < -36 ? 2 : 1);
+  if (st.d > -5 && st.speed < st.vPeel + 1.2 && !(st.spitDone && st.tubeRun > 1.7)) say("LIP CATCHING YOU: PUMP", 2);
+  if (P.p > 0.5 && st.s > sMax - 0.14 && st.lipT > 0.02) say("TOO HIGH: EASE OFF (RIGHT)", 2);
+}
+
 export function autopilot(st, cond) {
   let targetS = st.t < 2.6 ? 0.42 : 0.5;
   let targetD = st.t < 2.6 ? -14 : -4.8;
@@ -355,22 +464,24 @@ export function autopilot(st, cond) {
     targetD = -22;
     targetS = 0.5 - 0.2 * out;
   }
-  let bias = 0;
-  for (const shark of cond.sharks || []) {
-    const dz = shark.z - st.z;
-    if (dz < -1.2 && dz > -16 && Math.abs(shark.s - st.s) < 0.2) bias += shark.s > st.s ? -0.85 : 0.85;
+  // the nearest shark or loose board in the next 26 m decides the line: round it on the side that has room
+  let near = null;
+  for (const h of [...(cond.sharks || []), ...(cond.boards || [])]) {
+    const dz = st.z - h.z;
+    if (dz > -1.5 && dz < 26 && (!near || st.z - near.z > dz)) near = h;
   }
-  for (const board of cond.boards || []) {
-    const dz = board.z - st.z;
-    if (dz < -1.2 && dz > -14 && Math.abs(board.s - st.s) < 0.16) bias += board.s > st.s ? -0.8 : 0.8;
-  }
+  if (near) targetS = dodgeLine(st, cond, near).target;
   if (extraCloseout(st.z - 10, cond.zones) > 0.3) targetD = -18;
   const wobble = Math.sin(st.t * 1.2) * 0.08 + Math.sin(st.t * 0.47) * 0.04;
-  const steer = clamp((targetS - st.s) * 3.1 - st.vs * 0.55 + wobble + bias, -1, 1);
+  const steer = clamp((targetS - st.s) * 3.1 - st.vs * 0.55 + wobble, -1, 1);
   const kick = st.spit >= 0 ? 3.2 : 1.8;
   const want = st.vPeel + clamp((st.d - targetD) * 0.28, -2.6, kick);
   let thr = clamp((want - st.speed) * 0.9, -1, 1);
-  if (st.speed < want - 0.4 && Math.sin(st.t * 7.2) > 0.05) thr = Math.max(thr, 0.85);
+  if (st.speed < want - 0.3) {
+    // behind the pace: pump on the beat (a short press every PUMP_BEAT seconds), hold the trim in between
+    const sinceBeat = st.t - st.lastPump;
+    thr = sinceBeat >= PUMP_BEAT + AUTO_LATE || (st.pumpWas && sinceBeat < 0.1) ? 1 : 0.3;
+  }
   return { steer, thr };
 }
 
@@ -462,15 +573,15 @@ export function syncWorld(world, st, dt, input, cond) {
 
   const aspect = world.camera.aspect;
   const m = clamp((aspect - 0.6) / 1.2, 0, 1);
-  const back = 1.05 + 0.4 * m;
-  const lift = 0.62 + 0.18 * m;
+  const back = 1.5 + 0.5 * m;
+  const lift = 0.7 + 0.2 * m;
   st.desired.copy(st.pos)
     .addScaledVector(st.ahead, -back)
     .addScaledVector(st.normal, 0.48)
     .addScaledVector(st.lateral, -0.06);
   st.desired.y += lift;
   st.look.copy(st.pos).addScaledVector(st.ahead, 9).addScaledVector(st.normal, 0.2);
-  st.look.y += 0.45;
+  st.look.y += 0.25;
   st.up.set(0, 1, 0).lerp(st.normal, 0.3).normalize();
 
   if (!st.camInit) {

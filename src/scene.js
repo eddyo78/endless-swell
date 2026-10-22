@@ -343,7 +343,7 @@ export async function createWorld(canvas) {
   const surfer = await createSurfer();
   scene.add(surfer.holder);
 
-  const spray = new Spray(7000);
+  const spray = new Spray(7000, undefined, foamTex);
   scene.add(spray.points);
   const wake = new Wake(70, foamTex);
   scene.add(wake.mesh);

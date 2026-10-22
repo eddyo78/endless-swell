@@ -160,7 +160,7 @@ ok("each new twist changes play: wave cap, heat length, side-shore push, dry ree
   assert.ok(dry.reefLift > 0 && dry.reef.length === baseReef(dry) + 1);
   const plain = tours.find((t) => t.twists.length === 0 && t.n > 30);
   assert.equal(plain, undefined, "from season 4 no event is without a twist");
-  const stats = { samples: 100, speedSum: 1000, speedSq: 10200, maxSpeed: 12, sSum: 50, tubeTime: 4, deepTime: 2, committed: 3, pumps: 3, turns: 3, stalls: 1, clean: true, spit: true, wipe: false };
+  const stats = { samples: 100, speedSum: 1000, speedSq: 10200, maxSpeed: 12, sSum: 50, tubeTime: 4, deepTime: 2, committed: 3, pumps: 3, goodPumps: 3, turns: 3, stalls: 1, clean: true, spit: true, wipe: false };
   const normal = judgeWave(stats, { feet: 8, twists: [] });
   const doubled = judgeWave(stats, { feet: 8, twists: ["spit-double"] });
   assert.equal(doubled.parts.spit, normal.parts.spit * 2);
@@ -396,7 +396,7 @@ ok("warm-up: rival two-wave totals rise from Event 1 to Event 5 with no jump, an
 ok("warm-up: a forgiven wipeout scores what the ride earned (ride length, cap), an ordinary one stays capped, and a ridden wave is untouched", () => {
   const tour = at(1, 1);
   const forgive = tour.forgiveWipe;
-  const wiped = (seconds, extra = {}) => ({ samples: seconds * 60, speedSum: seconds * 60 * 9, speedSq: seconds * 60 * 82, maxSpeed: 11, sSum: seconds * 60 * 0.5, tubeTime: 0, deepTime: 0, committed: 0, pumps: 3, turns: 2, stalls: 0, clean: false, spit: false, wipe: true, ...extra });
+  const wiped = (seconds, extra = {}) => ({ samples: seconds * 60, speedSum: seconds * 60 * 9, speedSq: seconds * 60 * 82, maxSpeed: 11, sSum: seconds * 60 * 0.5, tubeTime: 0, deepTime: 0, committed: 0, pumps: 3, goodPumps: 3, turns: 2, stalls: 0, clean: false, spit: false, wipe: true, ...extra });
   const plain = judgeWave(wiped(8), tour);
   const kind = judgeWave(wiped(8), tour, { forgive });
   assert.equal(plain.total, 0, "an ordinary wipeout with no tube time scores nothing");

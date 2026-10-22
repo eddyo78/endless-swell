@@ -289,6 +289,11 @@ for (const [set, m5] of [["bikini", CUT_CHEVRON], ["rashset", CUT_RASH]]) {
 for (const board of catalog.boards) {
   SCENARIOS.push({ name: `m5-board-${board.id}`, loadout: dress({ board: board.id }), ...STILL, cams: ["play", "deck"] });
 }
+// The look set (polish pass, 2026-10-22): light-tone surfers at the play camera in the default stance, the pump and the tube, both bodies.
+for (const [pose, pe] of Object.entries(FIN_POSES)) {
+  SCENARIOS.push({ name: `look-male-${pose}`, loadout: dress({ skin: "#f1c27d" }), ...pe, cams: ["play"] });
+  SCENARIOS.push({ name: `look-female-${pose}`, loadout: dress({ ...FEMALE, skin: "#f1c27d" }), ...pe, cams: ["play"] });
+}
 // Every shot is taken from the play camera and the close camera unless the scenario names its own.
 const DEFAULT_CAMS = ["play", "close"];
 

@@ -5,7 +5,7 @@ import { facePoint, waveParams } from "./wave.js";
 const Dynamic = THREE.DynamicDrawUsage;
 
 export class Spray {
-  constructor(max, foamBright = () => 1) {
+  constructor(max, foamBright = () => 1, foamTex = null) {
     this.max = max;
     this.brightFn = foamBright;
     this.head = 0;
@@ -21,13 +21,16 @@ export class Spray {
     this.aSize = new Float32Array(max);
     this.aAlpha = new Float32Array(max);
     this.aBright = new Float32Array(max);
+    this.aSeed = new Float32Array(max);
+    for (let i = 0; i < max; i++) this.aSeed[i] = Math.random();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3).setUsage(Dynamic));
     geo.setAttribute("aSize", new THREE.BufferAttribute(this.aSize, 1).setUsage(Dynamic));
     geo.setAttribute("aAlpha", new THREE.BufferAttribute(this.aAlpha, 1).setUsage(Dynamic));
     geo.setAttribute("aBright", new THREE.BufferAttribute(this.aBright, 1).setUsage(Dynamic));
+    geo.setAttribute("aSeed", new THREE.BufferAttribute(this.aSeed, 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
-    this.uniforms = { uScale: { value: 800 } };
+    this.uniforms = { uScale: { value: 800 }, tFoam: { value: foamTex } };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
       transparent: true,

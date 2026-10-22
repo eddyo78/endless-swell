@@ -182,7 +182,7 @@ void main(){
   float flat_ = smoothstep(0.55, 0.9, abs(N.y));
   vec2 uvF = vWorld.xz;
   vec2 uvW = vec2(vWorld.z, vArc);
-  vec3 t1 = nmap(uvF * 0.045 + vec2(0.012, 0.02) * uTime) + nmap(uvF * 0.16 + vec2(-0.03, 0.028) * uTime) * 0.6 + nmap(uvF * 0.55 + vec2(0.05, -0.04) * uTime) * 0.35;
+  vec3 t1 = nmap(uvF * 0.045 + vec2(0.012, 0.02) * uTime) * 0.22 + nmap(uvF * 0.16 + vec2(-0.03, 0.028) * uTime) * 0.5 + nmap(uvF * 0.55 + vec2(0.05, -0.04) * uTime) * 0.62 + nmap(uvF * 1.9 + vec2(-0.07, 0.05) * uTime) * 0.4;
   vec3 t2 = nmap(uvW * vec2(0.12, 0.05) + vec2(0.0, -0.08) * uTime) + nmap(uvW * vec2(0.35, 0.16) + vec2(0.015, -0.16) * uTime) * 0.7 + nmap(uvW * vec2(1.1, 0.5) + vec2(0.0, -0.35) * uTime) * 0.3;
   vec3 tn = mix(t2 * vec3(0.55, 0.55, 1.0), t1, flat_);
   float fade = uDetail / (1.0 + dist * 0.012);
@@ -212,15 +212,31 @@ void main(){
   body = mix(body, face, thickMix * (1.0 - low * 0.72));
   body = mix(body, glow, clamp(vCeil, 0.0, 1.0) * smoothstep(2.4, 0.35, vThick));
   body = mix(body, navy, smoothstep(2.6, 0.15, vY) * 0.55 * (0.4 + 0.6 * vTube));
+  float shoreX = smoothstep(52.0, 6.0, vWorld.x) * smoothstep(-2.0, 3.0, vWorld.x);
+  vec2 reefUv = vWorld.xz;
+  float reefN = texture2D(tFoam, reefUv * 0.018 + 0.31).r * 0.55 + texture2D(tFoam, reefUv * 0.06 + 0.7).r * 0.45;
+  float coral = smoothstep(0.52, 0.64, reefN);
+  float sandy = smoothstep(0.46, 0.34, reefN);
+  vec3 reefCol = mix(mix(vec3(0.015, 0.2, 0.26), vec3(0.06, 0.44, 0.44), sandy), vec3(0.012, 0.085, 0.08), coral);
+  body = mix(body, reefCol * (0.3 + 0.7 * uGlare), shoreX * flat_ * (1.0 - vTube * 0.7) * 0.9);
   body *= 0.4 + 0.6 * shadow;
   float back = pow(clamp(dot(-V, L), 0.0, 1.0), 3.0);
   float wrap = clamp(dot(-N, L) * 0.5 + 0.5, 0.0, 1.0);
   vec3 sssCol = mix(vec3(0.0, 0.45, 0.55), vec3(0.15, 1.0, 0.82), thin);
   vec3 sss = sssCol * uSunCol * thin * (0.1 + 0.55 * back + 0.18 * wrap) * (0.25 + 0.75 * uGlare) * 0.55;
   sss += vec3(0.0, 0.34, 0.38) * smoothstep(3.2, 0.55, vThick) * 0.1 * (0.35 + back) * clamp(vCeil, 0.0, 1.0);
+  float rim = smoothstep(1.1, 0.15, vThick) * clamp(vCeil, 0.0, 1.0);
+  sss += vec3(0.25, 1.0, 0.8) * uSunCol * rim * (0.22 + 0.9 * back) * (0.3 + 0.7 * uGlare) * 0.8;
   vec3 col = mix(body + sss, refl, F);
   float rl = max(dot(normalize(R), L), 0.0);
   col += uSunCol * (pow(rl, 640.0) * 1.35 + pow(rl, 48.0) * 0.1) * shadow * uGlare * (0.3 + 0.7 * clamp(F * 3.0, 0.0, 1.0));
+  if (flat_ > 0.2 && dist < 500.0) {
+    vec3 tg = nmap(uvF * 2.6 + vec2(0.09, -0.06) * uTime) + nmap(uvF * 5.3 + vec2(-0.11, 0.08) * uTime) * 0.7;
+    vec3 Ng = normalize(N + (T * tg.x + B * tg.y) * 0.55);
+    float gl = max(dot(reflect(-V, Ng), L), 0.0);
+    float gFade = 1.0 - smoothstep(120.0, 500.0, dist);
+    col += uSunCol * pow(gl, 1400.0) * 9.0 * flat_ * gFade * uGlare * (1.0 - vTube);
+  }
   float fm = vFoam;
   if (fm > 0.001) {
     vec2 flow = vec2(0.0, -0.11) * uTime;
@@ -251,35 +267,47 @@ varying float vTube; varying float vArc; varying float vCeil; varying float vY;
 void main(){
   vec4 w = modelMatrix * vec4(position, 1.0);
   vWorld = w.xyz; vN = vec3(0.0, 1.0, 0.0);
-  vThick = 8.0; vFoam = 0.0; vTube = 0.0; vArc = 0.0; vCeil = 0.0; vY = position.y;
+  vThick = 8.0; vFoam = 0.0; vTube = 0.0; vArc = 0.0; vCeil = 0.0; vY = 0.0;
   gl_Position = projectionMatrix * viewMatrix * w;
 }
 `;
 
 export const spray = {
   vertex: /* glsl */ `
-    attribute float aSize; attribute float aAlpha; attribute float aBright;
+    attribute float aSize; attribute float aAlpha; attribute float aBright; attribute float aSeed;
     uniform float uScale;
-    varying float vA; varying float vB; varying float vSoft;
+    varying float vA; varying float vB; varying float vSoft; varying float vSeed;
     void main(){
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
       gl_Position = projectionMatrix * mv;
       float ps = aSize * uScale / max(-mv.z, 0.45);
-      vA = aAlpha * smoothstep(0.2, 0.7, -mv.z);
-      vB = aBright;
-      vA *= 1.0 - smoothstep(90.0, 180.0, ps);
       vSoft = clamp(aSize * 3.0, 0.0, 1.0);
+      // anything this close to the lens would draw as a giant out-of-focus ball: fade it out before it gets there
+      float near = mix(smoothstep(0.25, 0.8, -mv.z), smoothstep(0.8, 2.4, -mv.z), vSoft);
+      vA = aAlpha * near;
+      vB = aBright;
+      vA *= 1.0 - smoothstep(70.0, 140.0, ps);
+      vSeed = aSeed;
       gl_PointSize = min(ps, 96.0);
     }`,
   fragment: /* glsl */ `
-    varying float vA; varying float vB; varying float vSoft;
+    uniform sampler2D tFoam;
+    varying float vA; varying float vB; varying float vSoft; varying float vSeed;
     void main(){
       vec2 q = gl_PointCoord * 2.0 - 1.0;
       float r2 = dot(q, q);
       if (r2 > 1.0) discard;
-      float hard = smoothstep(1.0, 0.15, r2) * 0.9;
-      float soft = exp(-r2 * 2.4) * (1.0 - r2);
-      float a = mix(hard, soft, vSoft) * vA;
+      // drops: a small hard bead with a bright top-left glint
+      float bead = smoothstep(1.0, 0.45, r2);
+      float glint = smoothstep(0.55, 0.0, length(q - vec2(-0.3, 0.3)));
+      float hard = bead * 0.8 + glint * 0.5;
+      // mist: a ragged wisp cut from the foam noise, rotated per particle, not a smooth disc
+      float ca = cos(vSeed * 6.2832), sa = sin(vSeed * 6.2832);
+      vec2 w = vec2(ca * q.x - sa * q.y, sa * q.x + ca * q.y) * 0.5 + 0.5;
+      float n = texture2D(tFoam, w * 0.55 + vec2(vSeed * 3.7, vSeed * 1.9)).r;
+      float body = (1.0 - r2);
+      float soft = smoothstep(0.3, 0.85, n * 0.95 + body * 0.55 - 0.18) * body;
+      float a = mix(hard, min(soft * 1.5, 1.0), vSoft) * vA;
       gl_FragColor = vec4(vec3(0.94, 0.98, 1.0) * vB, a);
     }`,
 };
@@ -309,10 +337,10 @@ export const wake = {
       float coreNear = (1.0 - smoothstep(0.0, 0.12, vAge)) * (1.0 - smoothstep(0.0, 0.45, across));
       float thr = mix(0.18, 0.5, vAge) + (1.0 - max(band, coreNear)) * 0.16;
       float a = smoothstep(thr - 0.05, thr + 0.2, n) * (1.0 - vAge * vAge) * smoothstep(0.0, 0.015, vAge);
-      a = max(a, 0.16 * band * c * (1.0 - vAge) * smoothstep(0.0, 0.015, vAge));
+      a = max(a, 0.07 * band * c * (1.0 - vAge) * smoothstep(0.0, 0.015, vAge));
       a *= 1.0 - smoothstep(0.72, 1.0, across);
-      a *= smoothstep(0.25, 1.2, vView);
-      gl_FragColor = vec4(vec3(0.95, 0.98, 1.0) * (1.15 * uLight), a * 0.72);
+      a *= smoothstep(2.4, 6.0, vView);
+      gl_FragColor = vec4(vec3(0.95, 0.98, 1.0) * (1.15 * uLight), a * 0.62);
     }`,
 };
 
